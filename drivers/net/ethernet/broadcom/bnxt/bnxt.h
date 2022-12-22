@@ -1980,6 +1980,8 @@ struct bnxt {
 				  (bp)->max_tpa_v2) && !is_kdump_kernel())
 #define BNXT_RX_JUMBO_MODE(bp)	((bp)->flags & BNXT_FLAG_JUMBO)
 
+#define BNXT_RX_AGG_PAGE_MODE(bp)    (PAGE_SIZE <= BNXT_RX_PAGE_SIZE)
+
 #define BNXT_CHIP_SR2(bp)			\
 	((bp)->chip_num == CHIP_NUM_58818)
 

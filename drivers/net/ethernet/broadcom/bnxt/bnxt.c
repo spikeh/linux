@@ -927,7 +927,6 @@ static inline int bnxt_alloc_rx_page(struct bnxt *bp,
 	unsigned int offset = 0;
 
 	page = __bnxt_alloc_rx_page(bp, &mapping, rxr, &offset, gfp);
-
 	if (!page)
 		return -ENOMEM;
 
@@ -3149,6 +3148,9 @@ skip_rx_buf_free:
 		if (!page)
 			continue;
 
+		dma_unmap_page_attrs(&pdev->dev, rx_agg_buf->mapping,
+				     BNXT_RX_PAGE_SIZE, bp->rx_dir,
+				     DMA_ATTR_WEAK_ORDERING);
 		rx_agg_buf->page = NULL;
 		__clear_bit(i, rxr->rx_agg_bmap);
 
