@@ -1279,6 +1279,28 @@ static int bnxt_srxclsrlins(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 		rc = bnxt_add_ntuple_cls_rule(bp, fs);
 	return rc;
 }
+
+static int bnxt_srxclsrldel(struct bnxt *bp, struct ethtool_rxnfc *cmd)
+{
+	struct ethtool_rx_flow_spec *fs = &cmd->fs;
+	struct bnxt_filter_base *fltr_base;
+	u32 id = fs->location;
+
+	rcu_read_lock();
+	fltr_base = bnxt_get_one_fltr_rcu(bp, bp->l2_fltr_hash_tbl,
+					  BNXT_L2_FLTR_HASH_SIZE, id);
+	if (fltr_base) {
+		struct bnxt_l2_filter *l2_fltr;
+
+		l2_fltr = container_of(fltr_base, struct bnxt_l2_filter, base);
+		bnxt_hwrm_l2_filter_free(bp, l2_fltr);
+		rcu_read_unlock();
+		bnxt_del_l2_filter(bp, l2_fltr);
+		return 0;
+	}
+	rcu_read_unlock();
+	return -ENOENT;
+}
 #endif
 
 static u64 get_ethtool_ipv4_rss(struct bnxt *bp)
@@ -1472,6 +1494,10 @@ static int bnxt_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 #ifdef CONFIG_RFS_ACCEL
 	case ETHTOOL_SRXCLSRLINS:
 		rc = bnxt_srxclsrlins(bp, cmd);
+		break;
+
+	case ETHTOOL_SRXCLSRLDEL:
+		rc = bnxt_srxclsrldel(bp, cmd);
 		break;
 #endif
 	default:
