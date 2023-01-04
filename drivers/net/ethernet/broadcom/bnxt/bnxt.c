@@ -5108,6 +5108,8 @@ void bnxt_del_l2_filter(struct bnxt *bp, struct bnxt_l2_filter *fltr)
 	spin_lock_bh(&bp->ntp_fltr_lock);
 	hlist_del_rcu(&fltr->base.hash);
 	list_del(&fltr->list);
+	if (fltr->base.flags)
+		bp->ntp_fltr_count--;
 	spin_unlock_bh(&bp->ntp_fltr_lock);
 	kfree_rcu(fltr, base.rcu);
 }
@@ -5173,6 +5175,7 @@ static int bnxt_init_l2_filter(struct bnxt *bp, struct bnxt_l2_filter *fltr,
 		if (bit_id < 0)
 			return -ENOMEM;
 		fltr->base.sw_id = (u16)bit_id;
+		bp->ntp_fltr_count++;
 	}
 	head = &bp->l2_fltr_hash_tbl[idx];
 	hlist_add_head_rcu(&fltr->base.hash, head);
