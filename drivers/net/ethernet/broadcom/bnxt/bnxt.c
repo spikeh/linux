@@ -13667,6 +13667,31 @@ static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 {
 	int i;
 
+	for (i = 0; i < BNXT_L2_FLTR_HASH_SIZE; i++) {
+		struct hlist_head *head;
+		struct hlist_node *tmp;
+		struct bnxt_l2_filter *fltr;
+
+		head = &bp->l2_fltr_hash_tbl[i];
+		hlist_for_each_entry_safe(fltr, tmp, head, base.hash) {
+			if (fltr->base.flags & BNXT_ACT_FUNC_DST) {
+				u16 vf_idx = fltr->base.vf_idx;
+
+				if (bnxt_vf_vnic_state_is_up(bp, vf_idx))
+					continue;
+
+				spin_lock_bh(&bp->ntp_fltr_lock);
+				if (!test_and_clear_bit(BNXT_FLTR_INSERTED,
+							&fltr->base.state)) {
+					spin_unlock_bh(&bp->ntp_fltr_lock);
+					continue;
+				}
+				hlist_del_rcu(&fltr->base.hash);
+				spin_unlock_bh(&bp->ntp_fltr_lock);
+				bnxt_del_l2_filter(bp, fltr);
+			}
+		}
+	}
 	for (i = 0; i < BNXT_NTP_FLTR_HASH_SIZE; i++) {
 		struct hlist_head *head;
 		struct hlist_node *tmp;
