@@ -1248,6 +1248,33 @@ update_vf_mac_exit:
 		bnxt_approve_mac(bp, bp->dev->dev_addr, false);
 }
 
+void bnxt_update_vf_vnic(struct bnxt *bp, u32 vf_idx, u32 state)
+{
+	struct bnxt_pf_info *pf = &bp->pf;
+	struct bnxt_vf_info *vf;
+
+	vf = &pf->vf[vf_idx];
+	if (state == EVENT_DATA1_VNIC_CHNG_VNIC_STATE_ALLOC)
+		vf->vnic_state_pending = 1;
+	else if (state == EVENT_DATA1_VNIC_CHNG_VNIC_STATE_FREE)
+		vf->vnic_state_pending = 0;
+}
+
+void bnxt_commit_vf_vnic(struct bnxt *bp, u32 vf_idx)
+{
+	struct bnxt_pf_info *pf = &bp->pf;
+	struct bnxt_vf_info *vf;
+
+	vf = &pf->vf[vf_idx];
+	vf->vnic_state = vf->vnic_state_pending;
+}
+
+bool bnxt_vf_vnic_state_is_up(struct bnxt *bp, u32 vf_idx)
+{
+	struct bnxt_vf_info *vf = &bp->pf.vf[vf_idx];
+
+	return (vf->vnic_state == 1);
+}
 #else
 
 int bnxt_cfg_hw_sriov(struct bnxt *bp, int *num_vfs, bool reset)
@@ -1273,5 +1300,18 @@ void bnxt_update_vf_mac(struct bnxt *bp)
 int bnxt_approve_mac(struct bnxt *bp, const u8 *mac, bool strict)
 {
 	return 0;
+}
+
+void bnxt_update_vf_vnic(struct bnxt *bp, u32 vf_idx, u32 state)
+{
+}
+
+void bnxt_commit_vf_vnic(struct bnxt *bp, u32 vf_idx)
+{
+}
+
+bool bnxt_vf_vnic_state_is_up(struct bnxt *bp, u32 vf_idx)
+{
+	return false;
 }
 #endif

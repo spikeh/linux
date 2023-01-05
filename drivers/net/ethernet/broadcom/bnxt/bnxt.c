@@ -234,6 +234,7 @@ static const u16 bnxt_async_events_arr[] = {
 	ASYNC_EVENT_CMPL_EVENT_ID_PPS_TIMESTAMP,
 	ASYNC_EVENT_CMPL_EVENT_ID_ERROR_REPORT,
 	ASYNC_EVENT_CMPL_EVENT_ID_PHC_UPDATE,
+	ASYNC_EVENT_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE,
 };
 
 static struct workqueue_struct *bnxt_pf_wq;
@@ -2500,6 +2501,22 @@ static int bnxt_async_event_process(struct bnxt *bp,
 		u16 seq_id = le32_to_cpu(cmpl->event_data2) & 0xffff;
 
 		hwrm_update_token(bp, seq_id, BNXT_HWRM_DEFERRED);
+		goto async_event_process_exit;
+	}
+	case ASYNC_EVENT_CMPL_EVENT_ID_DEFAULT_VNIC_CHANGE: {
+		u32 data1 = le32_to_cpu(cmpl->event_data1);
+		struct bnxt_pf_info *pf = &bp->pf;
+		u32 pf_id, vf_idx, vf_state;
+
+		pf_id = EVENT_DATA1_VNIC_CHNG_PF_ID(data1);
+		vf_idx = EVENT_DATA1_VNIC_CHNG_VF_ID(data1) - pf->first_vf_id;
+		vf_state = EVENT_DATA1_VNIC_CHNG_VNIC_STATE(data1);
+		if (BNXT_PF(bp) && pf->active_vfs && pf_id == pf->fw_fid &&
+		    vf_idx < pf->active_vfs) {
+			bnxt_update_vf_vnic(bp, vf_idx, vf_state);
+			set_bit(BNXT_VF_VNIC_CHANGE_SP_EVENT, &bp->sp_event);
+			break;
+		}
 		goto async_event_process_exit;
 	}
 	default:
@@ -8318,6 +8335,8 @@ static int __bnxt_hwrm_func_qcaps(struct bnxt *bp)
 		bp->fw_cap |= BNXT_FW_CAP_VLAN_TX_INSERT;
 	if (flags & FUNC_QCAPS_RESP_FLAGS_DBG_QCAPS_CMD_SUPPORTED)
 		bp->fw_cap |= BNXT_FW_CAP_DBG_QCAPS;
+	if (flags & FUNC_QCAPS_RESP_FLAGS_NOTIFY_VF_DEF_VNIC_CHNG_SUPPORTED)
+		bp->fw_cap |= BNXT_FW_CAP_VF_VNIC_NOTIFY;
 
 	flags_ext = le32_to_cpu(resp->flags_ext);
 	if (flags_ext & FUNC_QCAPS_RESP_FLAGS_EXT_EXT_HW_STATS_SUPPORTED)
@@ -12578,6 +12597,19 @@ static void bnxt_chk_missed_irq(struct bnxt *bp)
 
 static void bnxt_cfg_ntp_filters(struct bnxt *);
 
+static void bnxt_vf_vnic_change(struct bnxt *bp)
+{
+	struct bnxt_pf_info *pf = &bp->pf;
+	int i, num_vfs = pf->active_vfs;
+
+	if (!num_vfs)
+		return;
+
+	for (i = 0; i < num_vfs; i++)
+		bnxt_commit_vf_vnic(bp, i);
+	bnxt_cfg_ntp_filters(bp);
+}
+
 static void bnxt_init_ethtool_link_settings(struct bnxt *bp)
 {
 	struct bnxt_link_info *link_info = &bp->link_info;
@@ -12631,6 +12663,8 @@ static void bnxt_sp_task(struct work_struct *work)
 	if (test_and_clear_bit(BNXT_RX_MASK_SP_EVENT, &bp->sp_event))
 		bnxt_cfg_rx_mode(bp);
 
+	if (test_and_clear_bit(BNXT_VF_VNIC_CHANGE_SP_EVENT, &bp->sp_event))
+		bnxt_vf_vnic_change(bp);
 	if (test_and_clear_bit(BNXT_RX_NTP_FLTR_SP_EVENT, &bp->sp_event))
 		bnxt_cfg_ntp_filters(bp);
 	if (test_and_clear_bit(BNXT_HWRM_EXEC_FWD_REQ_SP_EVENT, &bp->sp_event))

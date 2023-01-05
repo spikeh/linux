@@ -32,6 +32,7 @@
 #include "bnxt_xdp.h"
 #include "bnxt_ptp.h"
 #include "bnxt_ethtool.h"
+#include "bnxt_sriov.h"
 #include "bnxt_nvm_defs.h"	/* NVRAM content constant and structure defs */
 #include "bnxt_fw_hdr.h"	/* Firmware hdr constant and structure defs */
 #include "bnxt_coredump.h"
@@ -1218,6 +1219,8 @@ static int bnxt_add_l2_cls_rule(struct bnxt *bp,
 		flags = BNXT_ACT_FUNC_DST;
 		vnic_id = 0xffff;
 		vf--;
+		if (!bnxt_vf_vnic_state_is_up(bp, vf))
+			return -ENODEV;
 	} else {
 		flags = BNXT_ACT_RING_DST;
 		if (bp->flags & BNXT_FLAG_CHIP_P5_PLUS)

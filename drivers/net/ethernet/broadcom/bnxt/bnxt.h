@@ -535,6 +535,23 @@ struct rx_tpa_end_cmp_ext {
 	  ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA2_PIN_ID_MASK) >>\
 	 ASYNC_EVENT_CMPL_ERROR_REPORT_INVALID_SIGNAL_EVENT_DATA2_PIN_ID_SFT)
 
+#define EVENT_DATA1_VNIC_CHNG_PF_ID(data1)				\
+	(((data1) &							\
+	  ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_PF_ID_MASK) >>\
+	 ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_PF_ID_SFT)
+
+#define EVENT_DATA1_VNIC_CHNG_VF_ID(data1)				\
+	(((data1) &							\
+	  ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_VF_ID_MASK) >>\
+	 ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_VF_ID_SFT)
+
+#define EVENT_DATA1_VNIC_CHNG_VNIC_STATE(data1)				\
+	((data1) &							\
+	 ASYNC_EVENT_CMPL_DEFAULT_VNIC_CHANGE_EVENT_DATA1_DEF_VNIC_STATE_MASK)
+
+#define EVENT_DATA1_VNIC_CHNG_VNIC_STATE_ALLOC	1
+#define EVENT_DATA1_VNIC_CHNG_VNIC_STATE_FREE	2
+
 struct nqe_cn {
 	__le16	type;
 	#define NQ_CN_TYPE_MASK           0x3fUL
@@ -1179,6 +1196,8 @@ struct bnxt_vf_info {
 	u8	vf_mac_addr[ETH_ALEN];	/* VF assigned MAC address, only
 					 * stored by PF.
 					 */
+	u8	vnic_state_pending;
+	u8	vnic_state;
 	u16	vlan;
 	u16	func_qcfg_flags;
 	u32	flags;
@@ -2115,6 +2134,7 @@ struct bnxt {
 	#define BNXT_FW_CAP_DFLT_VLAN_TPID_PCP		BIT_ULL(34)
 	#define BNXT_FW_CAP_PRE_RESV_VNICS		BIT_ULL(35)
 	#define BNXT_FW_CAP_BACKING_STORE_V2		BIT_ULL(36)
+	#define BNXT_FW_CAP_VF_VNIC_NOTIFY		BIT_ULL(37)
 
 	u32			fw_dbg_cap;
 
@@ -2195,6 +2215,7 @@ struct bnxt {
 #define BNXT_LINK_CFG_CHANGE_SP_EVENT	21
 #define BNXT_THERMAL_THRESHOLD_SP_EVENT	22
 #define BNXT_FW_ECHO_REQUEST_SP_EVENT	23
+#define BNXT_VF_VNIC_CHANGE_SP_EVENT	24
 
 	struct delayed_work	fw_reset_task;
 	int			fw_reset_state;

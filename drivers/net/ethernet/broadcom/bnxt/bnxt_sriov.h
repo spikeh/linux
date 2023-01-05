@@ -42,4 +42,7 @@ void bnxt_sriov_disable(struct bnxt *);
 void bnxt_hwrm_exec_fwd_req(struct bnxt *);
 void bnxt_update_vf_mac(struct bnxt *);
 int bnxt_approve_mac(struct bnxt *, const u8 *, bool);
+void bnxt_update_vf_vnic(struct bnxt *bp, u32 vf_id, u32 state);
+void bnxt_commit_vf_vnic(struct bnxt *bp, u32 vf_idx);
+bool bnxt_vf_vnic_state_is_up(struct bnxt *bp, u32 vf_idx);
 #endif
