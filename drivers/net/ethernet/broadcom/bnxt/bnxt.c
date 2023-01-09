@@ -5348,8 +5348,8 @@ int bnxt_hwrm_l2_filter_alloc(struct bnxt *bp, struct bnxt_l2_filter *fltr)
 
 }
 
-static int bnxt_hwrm_cfa_ntuple_filter_free(struct bnxt *bp,
-					    struct bnxt_ntuple_filter *fltr)
+int bnxt_hwrm_cfa_ntuple_filter_free(struct bnxt *bp,
+				     struct bnxt_ntuple_filter *fltr)
 {
 	struct hwrm_cfa_ntuple_filter_free_input *req;
 	int rc;
@@ -5381,8 +5381,8 @@ static int bnxt_hwrm_cfa_ntuple_filter_free(struct bnxt *bp,
 #define BNXT_NTP_TUNNEL_FLTR_FLAG				\
 		CFA_NTUPLE_FILTER_ALLOC_REQ_ENABLES_TUNNEL_TYPE
 
-static int bnxt_hwrm_cfa_ntuple_filter_alloc(struct bnxt *bp,
-					     struct bnxt_ntuple_filter *fltr)
+int bnxt_hwrm_cfa_ntuple_filter_alloc(struct bnxt *bp,
+				      struct bnxt_ntuple_filter *fltr)
 {
 	struct hwrm_cfa_ntuple_filter_alloc_output *resp;
 	struct hwrm_cfa_ntuple_filter_alloc_input *req;
@@ -13566,8 +13566,6 @@ int bnxt_insert_ntp_filter(struct bnxt *bp, struct bnxt_ntuple_filter *fltr,
 	bp->ntp_fltr_count++;
 	spin_unlock_bh(&bp->ntp_fltr_lock);
 
-	bnxt_queue_sp_work(bp, BNXT_RX_NTP_FLTR_SP_EVENT);
-
 	return 0;
 }
 
@@ -13645,8 +13643,10 @@ static int bnxt_rx_flow_steer(struct net_device *dev, const struct sk_buff *skb,
 	new_fltr->flow_id = flow_id;
 	new_fltr->base.rxq = rxq_index;
 	rc = bnxt_insert_ntp_filter(bp, new_fltr, idx);
-	if (!rc)
+	if (!rc) {
+		bnxt_queue_sp_work(bp, BNXT_RX_NTP_FLTR_SP_EVENT);
 		return new_fltr->base.sw_id;
+	}
 
 err_free:
 	bnxt_del_l2_filter(bp, l2_fltr);
@@ -13654,6 +13654,21 @@ err_free:
 	return rc;
 }
 #endif /* CONFIG_RFS_ACCEL */
+
+void bnxt_del_ntp_filter(struct bnxt *bp, struct bnxt_ntuple_filter *fltr)
+{
+	spin_lock_bh(&bp->ntp_fltr_lock);
+	if (!test_and_clear_bit(BNXT_FLTR_INSERTED, &fltr->base.state)) {
+		spin_unlock_bh(&bp->ntp_fltr_lock);
+		return;
+	}
+	hlist_del_rcu(&fltr->base.hash);
+	bp->ntp_fltr_count--;
+	spin_unlock_bh(&bp->ntp_fltr_lock);
+	bnxt_del_l2_filter(bp, fltr->l2_fltr);
+	clear_bit(fltr->base.sw_id, bp->ntp_fltr_bmap);
+	kfree_rcu(fltr, base.rcu);
+}
 
 static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 {
@@ -13695,6 +13710,8 @@ static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 			bool del = false;
 
 			if (test_bit(BNXT_FLTR_VALID, &fltr->base.state)) {
+				if (fltr->base.flags & BNXT_ACT_NO_AGING)
+					continue;
 				if (rps_may_expire_flow(bp->dev, fltr->base.rxq,
 							fltr->flow_id,
 							fltr->base.sw_id)) {
@@ -13711,20 +13728,8 @@ static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 					set_bit(BNXT_FLTR_VALID, &fltr->base.state);
 			}
 
-			if (del) {
-				spin_lock_bh(&bp->ntp_fltr_lock);
-				if (!test_and_clear_bit(BNXT_FLTR_INSERTED, &fltr->base.state)) {
-					spin_unlock_bh(&bp->ntp_fltr_lock);
-					continue;
-				}
-				hlist_del_rcu(&fltr->base.hash);
-				bp->ntp_fltr_count--;
-				spin_unlock_bh(&bp->ntp_fltr_lock);
-				bnxt_del_l2_filter(bp, fltr->l2_fltr);
-				synchronize_rcu();
-				clear_bit(fltr->base.sw_id, bp->ntp_fltr_bmap);
-				kfree(fltr);
-			}
+			if (del)
+				bnxt_del_ntp_filter(bp, fltr);
 		}
 	}
 	if (test_and_clear_bit(BNXT_HWRM_PF_UNLOAD_SP_EVENT, &bp->sp_event))
