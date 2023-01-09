@@ -4605,7 +4605,6 @@ static void bnxt_clear_ring_indices(struct bnxt *bp)
 
 static void bnxt_free_ntp_fltrs(struct bnxt *bp, bool irq_reinit)
 {
-#ifdef CONFIG_RFS_ACCEL
 	int i;
 
 	/* Under rtnl_lock and all our NAPIs have been disabled.  It's
@@ -4627,12 +4626,10 @@ static void bnxt_free_ntp_fltrs(struct bnxt *bp, bool irq_reinit)
 		bp->ntp_fltr_bmap = NULL;
 	}
 	bp->ntp_fltr_count = 0;
-#endif
 }
 
 static int bnxt_alloc_ntp_fltrs(struct bnxt *bp)
 {
-#ifdef CONFIG_RFS_ACCEL
 	int i, rc = 0;
 
 	if (!(bp->flags & BNXT_FLAG_RFS))
@@ -4649,9 +4646,6 @@ static int bnxt_alloc_ntp_fltrs(struct bnxt *bp)
 		rc = -ENOMEM;
 
 	return rc;
-#else
-	return 0;
-#endif
 }
 
 static void bnxt_free_l2_filters(struct bnxt *bp)
@@ -5354,7 +5348,6 @@ int bnxt_hwrm_l2_filter_alloc(struct bnxt *bp, struct bnxt_l2_filter *fltr)
 
 }
 
-#ifdef CONFIG_RFS_ACCEL
 static int bnxt_hwrm_cfa_ntuple_filter_free(struct bnxt *bp,
 					    struct bnxt_ntuple_filter *fltr)
 {
@@ -5459,7 +5452,6 @@ static int bnxt_hwrm_cfa_ntuple_filter_alloc(struct bnxt *bp,
 	hwrm_req_drop(bp, req);
 	return rc;
 }
-#endif
 
 static int bnxt_hwrm_set_vnic_filter(struct bnxt *bp, u16 vnic_id, u16 idx,
 				     const u8 *mac_addr)
@@ -9359,7 +9351,6 @@ static int bnxt_setup_vnic(struct bnxt *bp, u16 vnic_id)
 
 static int bnxt_alloc_rfs_vnics(struct bnxt *bp)
 {
-#ifdef CONFIG_RFS_ACCEL
 	int i, rc = 0;
 
 	if (bp->flags & BNXT_FLAG_CHIP_P5_PLUS)
@@ -9388,9 +9379,6 @@ static int bnxt_alloc_rfs_vnics(struct bnxt *bp)
 			break;
 	}
 	return rc;
-#else
-	return 0;
-#endif
 }
 
 /* Allow PF, trusted VFs and VFs with default VLAN to be in promiscuous mode */
@@ -9718,7 +9706,6 @@ static int bnxt_setup_int_mode(struct bnxt *bp)
 	return rc;
 }
 
-#ifdef CONFIG_RFS_ACCEL
 static unsigned int bnxt_get_max_func_rss_ctxs(struct bnxt *bp)
 {
 	return bp->hw_resc.max_rsscos_ctxs;
@@ -9728,7 +9715,6 @@ static unsigned int bnxt_get_max_func_vnics(struct bnxt *bp)
 {
 	return bp->hw_resc.max_vnics;
 }
-#endif
 
 unsigned int bnxt_get_max_func_stat_ctxs(struct bnxt *bp)
 {
@@ -11800,7 +11786,6 @@ static bool bnxt_rfs_supported(struct bnxt *bp)
 /* If runtime conditions support RFS */
 static bool bnxt_rfs_capable(struct bnxt *bp)
 {
-#ifdef CONFIG_RFS_ACCEL
 	int vnics, max_vnics, max_rss_ctxs;
 
 	if (bp->flags & BNXT_FLAG_CHIP_P5_PLUS)
@@ -11836,9 +11821,6 @@ static bool bnxt_rfs_capable(struct bnxt *bp)
 	netdev_warn(bp->dev, "Unable to reserve resources to support NTUPLE filters.\n");
 	bnxt_hwrm_reserve_rings(bp, 0, 0, 0, 0, 0, 1);
 	return false;
-#else
-	return false;
-#endif
 }
 
 static netdev_features_t bnxt_fix_features(struct net_device *dev,
@@ -13510,7 +13492,6 @@ static int bnxt_setup_tc(struct net_device *dev, enum tc_setup_type type,
 	}
 }
 
-#ifdef CONFIG_RFS_ACCEL
 static bool bnxt_fltr_match(struct bnxt_ntuple_filter *f1,
 			    struct bnxt_ntuple_filter *f2)
 {
@@ -13541,7 +13522,7 @@ static bool bnxt_fltr_match(struct bnxt_ntuple_filter *f1,
 	return false;
 }
 
-static struct bnxt_ntuple_filter *
+struct bnxt_ntuple_filter *
 bnxt_lookup_ntp_filter_from_idx(struct bnxt *bp,
 				struct bnxt_ntuple_filter *fltr, u32 idx)
 {
@@ -13556,13 +13537,41 @@ bnxt_lookup_ntp_filter_from_idx(struct bnxt *bp,
 	return NULL;
 }
 
-static u32 bnxt_get_ntp_filter_idx(struct bnxt *bp, struct flow_keys *fkeys)
+u32 bnxt_get_ntp_filter_idx(struct bnxt *bp, struct flow_keys *fkeys)
 {
 	return jhash2((u32 *)&fkeys->FLOW_KEYS_HASH_START_FIELD,
 		      BNXT_NTUPLE_KEY_SIZE, bp->hash_seed) &
 	       BNXT_NTP_FLTR_HASH_MASK;
 }
 
+int bnxt_insert_ntp_filter(struct bnxt *bp, struct bnxt_ntuple_filter *fltr,
+			   u32 idx)
+{
+	struct hlist_head *head;
+	int bit_id;
+
+	spin_lock_bh(&bp->ntp_fltr_lock);
+	bit_id = bitmap_find_free_region(bp->ntp_fltr_bmap, BNXT_MAX_FLTR, 0);
+	if (bit_id < 0) {
+		spin_unlock_bh(&bp->ntp_fltr_lock);
+		return -ENOMEM;
+	}
+
+	fltr->base.sw_id = (u16)bit_id;
+	fltr->base.type = BNXT_FLTR_TYPE_NTUPLE;
+	fltr->base.flags |= BNXT_ACT_RING_DST;
+	head = &bp->ntp_fltr_hash_tbl[idx];
+	hlist_add_head_rcu(&fltr->base.hash, head);
+	set_bit(BNXT_FLTR_INSERTED, &fltr->base.state);
+	bp->ntp_fltr_count++;
+	spin_unlock_bh(&bp->ntp_fltr_lock);
+
+	bnxt_queue_sp_work(bp, BNXT_RX_NTP_FLTR_SP_EVENT);
+
+	return 0;
+}
+
+#ifdef CONFIG_RFS_ACCEL
 static int bnxt_rx_flow_steer(struct net_device *dev, const struct sk_buff *skb,
 			      u16 rxq_index, u32 flow_id)
 {
@@ -13571,8 +13580,7 @@ static int bnxt_rx_flow_steer(struct net_device *dev, const struct sk_buff *skb,
 	struct flow_keys *fkeys;
 	struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
 	struct bnxt_l2_filter *l2_fltr;
-	int rc = 0, idx, bit_id;
-	struct hlist_head *head;
+	int rc = 0, idx;
 	u32 flags;
 
 	if (ether_addr_equal(dev->dev_addr, eth->h_dest)) {
@@ -13634,34 +13642,18 @@ static int bnxt_rx_flow_steer(struct net_device *dev, const struct sk_buff *skb,
 	}
 	rcu_read_unlock();
 
-	spin_lock_bh(&bp->ntp_fltr_lock);
-	bit_id = bitmap_find_free_region(bp->ntp_fltr_bmap, BNXT_MAX_FLTR, 0);
-	if (bit_id < 0) {
-		spin_unlock_bh(&bp->ntp_fltr_lock);
-		rc = -ENOMEM;
-		goto err_free;
-	}
-
-	new_fltr->base.sw_id = (u16)bit_id;
 	new_fltr->flow_id = flow_id;
 	new_fltr->base.rxq = rxq_index;
-	new_fltr->base.type = BNXT_FLTR_TYPE_NTUPLE;
-	new_fltr->base.flags = BNXT_ACT_RING_DST;
-	head = &bp->ntp_fltr_hash_tbl[idx];
-	hlist_add_head_rcu(&new_fltr->base.hash, head);
-	set_bit(BNXT_FLTR_INSERTED, &new_fltr->base.state);
-	bp->ntp_fltr_count++;
-	spin_unlock_bh(&bp->ntp_fltr_lock);
-
-	bnxt_queue_sp_work(bp, BNXT_RX_NTP_FLTR_SP_EVENT);
-
-	return new_fltr->base.sw_id;
+	rc = bnxt_insert_ntp_filter(bp, new_fltr, idx);
+	if (!rc)
+		return new_fltr->base.sw_id;
 
 err_free:
 	bnxt_del_l2_filter(bp, l2_fltr);
 	kfree(new_fltr);
 	return rc;
 }
+#endif /* CONFIG_RFS_ACCEL */
 
 static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 {
@@ -13738,14 +13730,6 @@ static void bnxt_cfg_ntp_filters(struct bnxt *bp)
 	if (test_and_clear_bit(BNXT_HWRM_PF_UNLOAD_SP_EVENT, &bp->sp_event))
 		netdev_info(bp->dev, "Receive PF driver unload event!\n");
 }
-
-#else
-
-static void bnxt_cfg_ntp_filters(struct bnxt *bp)
-{
-}
-
-#endif /* CONFIG_RFS_ACCEL */
 
 static int bnxt_udp_tunnel_set_port(struct net_device *netdev, unsigned int table,
 				    unsigned int entry, struct udp_tunnel_info *ti)
