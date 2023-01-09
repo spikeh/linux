@@ -1392,6 +1392,20 @@ static int bnxt_srxclsrldel(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 		bnxt_del_l2_filter(bp, l2_fltr);
 		return 0;
 	}
+	fltr_base = bnxt_get_one_fltr_rcu(bp, bp->ntp_fltr_hash_tbl,
+					  BNXT_NTP_FLTR_HASH_SIZE,
+					  fs->location);
+	if (fltr_base) {
+		struct bnxt_ntuple_filter *fltr;
+
+		fltr = container_of(fltr_base, struct bnxt_ntuple_filter, base);
+		rcu_read_unlock();
+		if (!(fltr->base.flags & BNXT_ACT_NO_AGING))
+			return -EINVAL;
+		bnxt_hwrm_cfa_ntuple_filter_free(bp, fltr);
+		bnxt_del_ntp_filter(bp, fltr);
+		return 0;
+	}
 	rcu_read_unlock();
 	return -ENOENT;
 }
