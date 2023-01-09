@@ -1309,6 +1309,7 @@ static int bnxt_add_ntuple_cls_rule(struct bnxt *bp,
 		rc = -EOPNOTSUPP;
 		goto ntuple_err;
 	}
+	new_fltr->ntuple_flags = BNXT_NTUPLE_MATCH_ALL;
 	idx = bnxt_get_ntp_filter_idx(bp, fkeys);
 	rcu_read_lock();
 	fltr = bnxt_lookup_ntp_filter_from_idx(bp, new_fltr, idx);
