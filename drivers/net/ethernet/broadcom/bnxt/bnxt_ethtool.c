@@ -1196,7 +1196,10 @@ static int bnxt_grxclsrule(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 		}
 	}
 
-	fs->ring_cookie = fltr->base.rxq;
+	if (fltr->base.flags & BNXT_ACT_DROP)
+		fs->ring_cookie = RX_CLS_FLOW_DISC;
+	else
+		fs->ring_cookie = fltr->base.rxq;
 	rc = 0;
 
 fltr_err:
@@ -1290,6 +1293,7 @@ static int bnxt_add_ntuple_cls_rule(struct bnxt *bp,
 	u8 vf = ethtool_get_flow_spec_ring_vf(fs->ring_cookie);
 	u32 ring = ethtool_get_flow_spec_ring(fs->ring_cookie);
 	struct bnxt_ntuple_filter *new_fltr, *fltr;
+	s64 cookie = (s64)fs->ring_cookie;
 	struct bnxt_l2_filter *l2_fltr;
 	struct bnxt_flow_masks *fmasks;
 	u32 flow_type = fs->flow_type;
@@ -1404,6 +1408,8 @@ static int bnxt_add_ntuple_cls_rule(struct bnxt *bp,
 
 	new_fltr->base.rxq = ring;
 	new_fltr->base.flags = BNXT_ACT_NO_AGING;
+	if (cookie == RX_CLS_FLOW_DISC)
+		new_fltr->base.flags |= BNXT_ACT_DROP;
 	__set_bit(BNXT_FLTR_VALID, &new_fltr->base.state);
 	rc = bnxt_insert_ntp_filter(bp, new_fltr, idx);
 	if (!rc) {
@@ -1426,6 +1432,7 @@ ntuple_err:
 static int bnxt_srxclsrlins(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 {
 	struct ethtool_rx_flow_spec *fs = &cmd->fs;
+	s64 cookie = (s64)fs->ring_cookie;
 	u32 ring, flow_type;
 	int rc;
 	u8 vf;
@@ -1460,6 +1467,8 @@ static int bnxt_srxclsrlins(struct bnxt *bp, struct ethtool_rxnfc *cmd)
 		return -EINVAL;
 
 	flow_type &= ~FLOW_EXT;
+	if (cookie == RX_CLS_FLOW_DISC && flow_type != ETHER_FLOW)
+		return bnxt_add_ntuple_cls_rule(bp, fs);
 	if (flow_type == ETHER_FLOW)
 		rc = bnxt_add_l2_cls_rule(bp, fs);
 	else
