@@ -805,6 +805,31 @@ static void bnxt_tx_int(struct bnxt *bp, struct bnxt_napi *bnapi, int budget)
 	bnapi->events &= ~BNXT_TX_CMP_EVENT;
 }
 
+static struct page *__bnxt_alloc_rx_64k_page(struct bnxt *bp, dma_addr_t *mapping,
+					     struct bnxt_rx_ring_info *rxr,
+					     gfp_t gfp, unsigned int *page_offset)
+{
+	unsigned int offset = 0;
+	struct page *page;
+
+	page = page_pool_dev_alloc_frag(rxr->page_pool, &offset, BNXT_RX_PAGE_SIZE);
+	if (!page)
+		return NULL;
+
+	*mapping = dma_map_page_attrs(&bp->pdev->dev, page, offset,
+				      BNXT_RX_PAGE_SIZE, DMA_FROM_DEVICE,
+				      DMA_ATTR_WEAK_ORDERING);
+	if (dma_mapping_error(&bp->pdev->dev, *mapping)) {
+		page_pool_recycle_direct(rxr->page_pool, page);
+		return NULL;
+	}
+
+	if (page_offset)
+		*page_offset = offset;
+
+	return page;
+}
+
 static struct page *__bnxt_alloc_rx_page(struct bnxt *bp, dma_addr_t *mapping,
 					 struct bnxt_rx_ring_info *rxr,
 					 unsigned int *offset,
@@ -914,6 +939,7 @@ static inline u16 bnxt_find_next_agg_idx(struct bnxt_rx_ring_info *rxr, u16 idx)
 	return next;
 }
 
+
 static inline int bnxt_alloc_rx_page(struct bnxt *bp,
 				     struct bnxt_rx_ring_info *rxr,
 				     u16 prod, gfp_t gfp)
@@ -926,7 +952,11 @@ static inline int bnxt_alloc_rx_page(struct bnxt *bp,
 	u16 sw_prod = rxr->rx_sw_agg_prod;
 	unsigned int offset = 0;
 
-	page = __bnxt_alloc_rx_page(bp, &mapping, rxr, &offset, gfp);
+	if (PAGE_SIZE <= BNXT_RX_PAGE_SIZE)
+		page = __bnxt_alloc_rx_page(bp, &mapping, rxr, &offset, gfp);
+	else
+		page = __bnxt_alloc_rx_64k_page(bp, &mapping, rxr, gfp, &offset);
+
 	if (!page)
 		return -ENOMEM;
 
