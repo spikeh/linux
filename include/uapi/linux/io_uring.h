@@ -826,6 +826,15 @@ struct io_uring_zcrx_offsets {
 	__u32	mmap_sz;
 };
 
+struct io_uring_zcrx_area_reg {
+	__u64	addr;
+	__u64	len;
+	__u32	flags;
+	__u16	area_id;
+	__u16	__resv1;
+	__u64	__resv2[3];
+};
+
 /*
  * Argument for IORING_REGISTER_ZC_RX_IFQ
  */

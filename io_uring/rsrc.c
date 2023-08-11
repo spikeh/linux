@@ -110,7 +110,7 @@ static int io_copy_iov(struct io_ring_ctx *ctx, struct iovec *dst,
 	return 0;
 }
 
-static int io_buffer_validate(struct iovec *iov)
+int io_buffer_validate(struct iovec *iov)
 {
 	unsigned long tmp, acct_len = iov->iov_len + (PAGE_SIZE - 1);
 
