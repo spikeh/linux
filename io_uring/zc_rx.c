@@ -5,6 +5,7 @@
 #include <linux/mm.h>
 #include <linux/io_uring.h>
 #include <linux/netdevice.h>
+#include <linux/nospec.h>
 #include <net/tcp.h>
 #include <net/af_unix.h>
 
@@ -41,6 +42,83 @@ static void io_free_rbuf_ring(struct io_zc_rx_ifq *ifq)
 	ifq->rqes = NULL;
 }
 
+static void io_zc_rx_free_pool(struct io_zc_rx_pool *pool)
+{
+	if (pool->freelist)
+		kvfree(pool->freelist);
+	if (pool->bufs)
+		kvfree(pool->bufs);
+	if (pool->pages) {
+		unpin_user_pages(pool->pages, pool->nr_bufs);
+		kvfree(pool->pages);
+	}
+	kfree(pool);
+}
+
+static int io_zc_rx_create_pool(struct io_ring_ctx *ctx,
+				struct io_zc_rx_ifq *ifq,
+				struct io_zc_rx_pool **res,
+				struct io_uring_zc_rx_region_reg *region)
+{
+	struct io_zc_rx_pool *pool;
+	int i, ret, nr_pages;
+	struct iovec iov;
+
+	if (region->flags || region->region_id)
+		return -EINVAL;
+	if (region->resv2[0] || region->resv2[1] || region->resv2[2])
+		return -EINVAL;
+	if (region->addr & ~PAGE_MASK || region->len & ~PAGE_MASK)
+		return -EINVAL;
+
+	iov.iov_base = u64_to_user_ptr(region->addr);
+	iov.iov_len = region->len;
+	ret = io_buffer_validate(&iov);
+	if (ret)
+		return ret;
+
+	ret = -ENOMEM;
+	pool = kmalloc(sizeof(*pool), GFP_KERNEL);
+	if (!pool)
+		goto err;
+
+	pool->pages = io_pin_pages((unsigned long)region->addr, region->len,
+				   &nr_pages);
+	pool->nr_bufs = nr_pages;
+	if (!pool->pages)
+		goto err;
+
+	pool->bufs = kvmalloc_array(nr_pages, sizeof(pool->bufs[0]), GFP_KERNEL);
+	if (!pool->bufs)
+		goto err;
+
+	pool->freelist = kvmalloc_array(nr_pages, sizeof(pool->freelist[0]),
+					GFP_KERNEL);
+	if (!pool->freelist)
+		goto err;
+
+	for (i = 0; i < nr_pages; i++) {
+		struct net_iov *niov = &pool->bufs[i].niov;
+
+		memset(niov, 0, sizeof(*niov));
+		atomic_long_set(&niov->pp_ref_count, 0);
+		pool->freelist[i] = i;
+	}
+
+	pool->free_count = nr_pages;
+	pool->ifq = ifq;
+	/* we're only supporting one region per ifq for now */
+	pool->pool_id = 0;
+	region->region_id = pool->pool_id;
+	spin_lock_init(&pool->freelist_lock);
+	*res = pool;
+	return 0;
+err:
+	if (pool)
+		io_zc_rx_free_pool(pool);
+	return ret;
+}
+
 static struct io_zc_rx_ifq *io_zc_rx_ifq_alloc(struct io_ring_ctx *ctx)
 {
 	struct io_zc_rx_ifq *ifq;
@@ -73,7 +151,8 @@ static void io_shutdown_ifq(struct io_zc_rx_ifq *ifq)
 static void io_zc_rx_ifq_free(struct io_zc_rx_ifq *ifq)
 {
 	io_shutdown_ifq(ifq);
-
+	if (ifq->pool)
+		io_zc_rx_free_pool(ifq->pool);
 	io_free_rbuf_ring(ifq);
 	kfree(ifq);
 }
@@ -81,6 +160,7 @@ static void io_zc_rx_ifq_free(struct io_zc_rx_ifq *ifq)
 int io_register_zc_rx_ifq(struct io_ring_ctx *ctx,
 			  struct io_uring_zc_rx_ifq_reg __user *arg)
 {
+	struct io_uring_zc_rx_region_reg region;
 	struct io_uring_zc_rx_ifq_reg reg;
 	struct io_zc_rx_ifq *ifq;
 	size_t ring_sz, rqes_sz;
@@ -98,12 +178,18 @@ int io_register_zc_rx_ifq(struct io_ring_ctx *ctx,
 		return -EINVAL;
 	if (copy_from_user(&reg, arg, sizeof(reg)))
 		return -EFAULT;
+	if (copy_from_user(&region, u64_to_user_ptr(reg.region), sizeof(region)))
+		return -EFAULT;
 
 	ifq = io_zc_rx_ifq_alloc(ctx);
 	if (!ifq)
 		return -ENOMEM;
 
 	ret = io_allocate_rbuf_ring(ifq, &reg);
+	if (ret)
+		goto err;
+
+	ret = io_zc_rx_create_pool(ctx, ifq, &ifq->pool, &region);
 	if (ret)
 		goto err;
 
@@ -121,7 +207,11 @@ int io_register_zc_rx_ifq(struct io_ring_ctx *ctx,
 		ret = -EFAULT;
 		goto err;
 	}
-
+	if (copy_to_user(u64_to_user_ptr(reg.region), &region,
+			 sizeof(region))) {
+		ret = -EFAULT;
+		goto err;
+	}
 	ctx->ifq = ifq;
 	return 0;
 err:

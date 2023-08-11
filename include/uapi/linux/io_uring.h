@@ -827,6 +827,14 @@ struct io_rbuf_rqring_offsets {
 	__u8	__pad[4];
 };
 
+struct io_uring_zc_rx_region_reg {
+	__u64	addr;
+	__u64	len;
+	__u32	flags;
+	__u32	region_id;
+	__u64	resv2[3];
+};
+
 /*
  * Argument for IORING_REGISTER_ZC_RX_IFQ
  */
@@ -834,12 +842,12 @@ struct io_uring_zc_rx_ifq_reg {
 	__u32	if_idx;
 	/* hw rxq id */
 	__u32	if_rxq_id;
-	__u32	region_id;
 	__u32	rq_entries;
 	__u32	flags;
 	__u16	cpu;
 
 	__u32	mmap_sz;
+	__u64	region; /* io_uring_zc_rx_region_reg pointer */
 	struct io_rbuf_rqring_offsets rq_off;
 };
 
