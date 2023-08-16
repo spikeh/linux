@@ -72,4 +72,9 @@ static inline int io_register_zc_rx_sock(struct io_ring_ctx *ctx,
 }
 #endif
 
+int io_recvzc(struct io_kiocb *req, unsigned int issue_flags);
+int io_recvzc_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe);
+int io_zc_rx_recv(struct io_zc_rx_ifq *ifq, struct socket *sock,
+		  unsigned int limit, unsigned int flags);
+
 #endif
