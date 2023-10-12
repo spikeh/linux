@@ -937,4 +937,23 @@ int io_zc_rx_recv(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
 	return io_zc_rx_tcp_recvmsg(req, ifq, sk, flags, issue_flags);
 }
 
+struct page *io_iov_get_page(netmem_ref netmem)
+{
+	struct io_zc_rx_ifq *ifq;
+	struct net_iov *niov;
+	unsigned idx;
+
+	if (WARN_ON_ONCE(!netmem_is_net_iov(netmem)))
+		return NULL;
+	niov = netmem_to_net_iov(netmem);
+
+	if (WARN_ON_ONCE(niov->pp->mp_ops != &io_uring_pp_zc_ops))
+		return  NULL;
+
+	ifq = niov->pp->mp_priv;
+	idx = io_get_buf_idx(ifq, (struct io_zc_rx_buf *)niov);
+	return ifq->pool->pages[idx];
+}
+EXPORT_SYMBOL_GPL(io_iov_get_page);
+
 #endif
