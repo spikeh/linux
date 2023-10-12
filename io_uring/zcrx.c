@@ -39,6 +39,9 @@ static void __io_zcrx_unmap_area(struct io_zcrx_ifq *ifq,
 	struct device *dev = ifq->dev->dev.parent;
 	int i;
 
+	if (!get_dma_ops(dev))
+		return;
+
 	for (i = 0; i < nr_mapped; i++) {
 		struct net_iov *niov = &area->nia.niovs[i];
 		dma_addr_t dma;
@@ -61,17 +64,22 @@ static int io_zcrx_map_area(struct io_zcrx_ifq *ifq, struct io_zcrx_area *area)
 	struct device *dev = ifq->dev->dev.parent;
 	int i;
 
-	if (!get_dma_ops(dev))
-		return -EINVAL;
+	// if (!get_dma_ops(dev))
+	// 	return -EINVAL;
 
 	for (i = 0; i < area->nia.num_niovs; i++) {
 		struct net_iov *niov = &area->nia.niovs[i];
-		dma_addr_t dma;
+		dma_addr_t dma = 0;
+
+		if (!get_dma_ops(dev))
+			goto do_set;
 
 		dma = dma_map_page_attrs(dev, area->pages[i], 0, PAGE_SIZE,
 					 DMA_FROM_DEVICE, IO_DMA_ATTR);
 		if (dma_mapping_error(dev, dma))
 			break;
+
+do_set:
 		if (!io_niov_set_dma(niov, dma)) {
 			dma_unmap_page_attrs(dev, dma, PAGE_SIZE,
 					     DMA_FROM_DEVICE, IO_DMA_ATTR);
@@ -630,12 +638,12 @@ static int io_pp_zc_init(struct page_pool *pp)
 		return -EINVAL;
 	if (WARN_ON_ONCE(ifq->dev != pp->slow.netdev))
 		return -EINVAL;
-	if (pp->dma_map)
-		return -EINVAL;
+	// if (pp->dma_map)
+	// 	return -EINVAL;
 	if (pp->p.order != 0)
 		return -EINVAL;
-	if (pp->p.dma_dir != DMA_FROM_DEVICE)
-		return -EINVAL;
+	// if (pp->p.dma_dir != DMA_FROM_DEVICE)
+	// 	return -EINVAL;
 
 	percpu_ref_get(&ifq->ctx->refs);
 	return 0;
@@ -942,3 +950,19 @@ int io_zcrx_recv(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 	sock_rps_record_flow(sk);
 	return io_zcrx_tcp_recvmsg(req, ifq, sk, flags, issue_flags);
 }
+
+#include <linux/io_uring/net.h>
+
+struct page *io_iov_get_page(netmem_ref netmem)
+{
+	struct net_iov *niov;
+
+	if (WARN_ON_ONCE(!netmem_is_net_iov(netmem)))
+		return NULL;
+	niov = netmem_to_net_iov(netmem);
+
+	if (WARN_ON_ONCE(niov->pp->mp_ops != &io_uring_pp_zc_ops))
+		return  NULL;
+	return io_zcrx_iov_page(niov);
+}
+EXPORT_SYMBOL_GPL(io_iov_get_page);
