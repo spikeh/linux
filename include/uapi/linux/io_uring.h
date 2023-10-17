@@ -579,6 +579,7 @@ enum {
 
 	/* register a network interface queue for zerocopy */
 	IORING_REGISTER_ZC_RX_IFQ		= 29,
+	IORING_REGISTER_ZC_RX_SOCK		= 30,
 
 	/* this goes last */
 	IORING_REGISTER_LAST,
@@ -822,6 +823,12 @@ struct io_uring_zc_rx_ifq_reg {
 
 	__u32	mmap_sz;
 	struct io_rbuf_rqring_offsets rq_off;
+};
+
+struct io_uring_zc_rx_sock_reg {
+	__u32	sockfd;
+	__u32	zc_rx_ifq_idx;
+	__u32	__resv[2];
 };
 
 #ifdef __cplusplus
