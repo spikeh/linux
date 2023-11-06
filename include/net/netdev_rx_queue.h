@@ -21,6 +21,7 @@ struct netdev_rx_queue {
 #ifdef CONFIG_XDP_SOCKETS
 	struct xsk_buff_pool            *pool;
 #endif
+	struct netdev_dmabuf_binding *binding;
 } ____cacheline_aligned_in_smp;
 
 /*
