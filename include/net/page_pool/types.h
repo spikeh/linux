@@ -128,6 +128,7 @@ struct mem_provider;
 
 enum pp_memory_provider_type {
 	__PP_MP_NONE, /* Use system allocator directly */
+	PP_MP_DMABUF_DEVMEM, /* dmabuf devmem provider */
 };
 
 struct pp_memory_provider_ops {
@@ -137,7 +138,14 @@ struct pp_memory_provider_ops {
 	bool (*release_page)(struct page_pool *pool, struct page *page);
 };
 
+extern const struct pp_memory_provider_ops dmabuf_devmem_ops;
+
 /* page_pool_iov support */
+
+/*  We overload the LSB of the struct page pointer to indicate whether it's
+ *  a page or page_pool_iov.
+ */
+#define PP_DEVMEM 0x01UL
 
 /* Owner of the dma-buf chunks inserted into the gen pool. Each scatterlist
  * entry from the dmabuf is inserted into the genpool as a chunk, and needs
@@ -162,6 +170,8 @@ struct page_pool_iov {
 	struct dmabuf_genpool_chunk_owner *owner;
 
 	refcount_t refcount;
+
+	struct page_pool *pp;
 };
 
 struct page_pool {
