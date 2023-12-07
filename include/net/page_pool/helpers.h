@@ -86,6 +86,11 @@ static inline u64 *page_pool_ethtool_stats_get(u64 *data, void *stats)
 
 /* page_pool_iov support */
 
+static inline struct page *page_pool_mangle_ppiov(struct page_pool_iov *ppiov)
+{
+	return (struct page *)((unsigned long)ppiov | PP_DEVMEM);
+}
+
 static inline struct dmabuf_genpool_chunk_owner *
 page_pool_iov_owner(const struct page_pool_iov *ppiov)
 {

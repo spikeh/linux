@@ -1074,7 +1074,7 @@ static struct page *mp_dmabuf_devmem_alloc_pages(struct page_pool *pool,
 	pool->pages_state_hold_cnt++;
 	trace_page_pool_state_hold(pool, (struct page *)ppiov,
 				   pool->pages_state_hold_cnt);
-	return (struct page *)((unsigned long)ppiov | PP_DEVMEM);
+	return page_pool_mangle_ppiov(ppiov);
 }
 
 static void mp_dmabuf_devmem_destroy(struct page_pool *pool)
