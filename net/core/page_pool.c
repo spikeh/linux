@@ -599,6 +599,16 @@ void __page_pool_release_page_dma(struct page_pool *pool, struct page *page)
 	page_pool_set_dma_addr(page, 0);
 }
 
+static void page_pool_return_provider(struct page_pool *pool, struct page *page)
+{
+	int count;
+
+	if (pool->mp_ops->release_page(pool, page)) {
+		count = atomic_inc_return_relaxed(&pool->pages_state_release_cnt);
+		trace_page_pool_state_release(pool, page, count);
+	}
+}
+
 /* Disconnects a page (from a page_pool).  API users can have a need
  * to disconnect a page (from a page_pool), to allow it to be used as
  * a regular page (that will eventually be returned to the normal
@@ -607,13 +617,13 @@ void __page_pool_release_page_dma(struct page_pool *pool, struct page *page)
 void page_pool_return_page(struct page_pool *pool, struct page *page)
 {
 	int count;
-	bool put;
 
-	put = true;
-	if (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops)
-		put = pool->mp_ops->release_page(pool, page);
-	else
-		__page_pool_release_page_dma(pool, page);
+	if (static_branch_unlikely(&page_pool_mem_providers) && pool->mp_ops) {
+		page_pool_return_provider(pool, page);
+		return;
+	}
+
+	__page_pool_release_page_dma(pool, page);
 
 	/* This may be the last page returned, releasing the pool, so
 	 * it is not safe to reference pool afterwards.
@@ -621,10 +631,8 @@ void page_pool_return_page(struct page_pool *pool, struct page *page)
 	count = atomic_inc_return_relaxed(&pool->pages_state_release_cnt);
 	trace_page_pool_state_release(pool, page, count);
 
-	if (put) {
-		page_pool_clear_pp_info(page);
-		put_page(page);
-	}
+	page_pool_clear_pp_info(page);
+	put_page(page);
 	/* An optimization would be to call __free_pages(page, pool->p.order)
 	 * knowing page is not part of page-cache (thus avoiding a
 	 * __page_cache_release() call).
@@ -1034,15 +1042,6 @@ void page_pool_update_nid(struct page_pool *pool, int new_nid)
 }
 EXPORT_SYMBOL(page_pool_update_nid);
 
-void __page_pool_iov_free(struct page_pool_iov *ppiov)
-{
-	if (ppiov->pp->mp_ops != &dmabuf_devmem_ops)
-		return;
-
-	netdev_free_devmem(ppiov);
-}
-EXPORT_SYMBOL_GPL(__page_pool_iov_free);
-
 /*** "Dmabuf devmem memory provider" ***/
 
 static int mp_dmabuf_devmem_init(struct page_pool *pool)
@@ -1093,9 +1092,12 @@ static bool mp_dmabuf_devmem_release_page(struct page_pool *pool,
 		return false;
 
 	ppiov = page_to_page_pool_iov(page);
-	page_pool_iov_put_many(ppiov, 1);
-	/* We don't want the page pool put_page()ing our page_pool_iovs. */
-	return false;
+
+	if (!page_pool_iov_sub_and_test(ppiov, 1))
+		return false;
+	netdev_free_devmem(ppiov);
+	/* tell page_pool that the ppiov is released */
+	return true;
 }
 
 const struct pp_memory_provider_ops dmabuf_devmem_ops = {

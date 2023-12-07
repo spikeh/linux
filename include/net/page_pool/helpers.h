@@ -137,15 +137,22 @@ static inline void page_pool_iov_get_many(struct page_pool_iov *ppiov,
 	refcount_add(count, &ppiov->refcount);
 }
 
-void __page_pool_iov_free(struct page_pool_iov *ppiov);
+static inline bool page_pool_iov_sub_and_test(struct page_pool_iov *ppiov,
+					      unsigned int count)
+{
+	return refcount_sub_and_test(count, &ppiov->refcount);
+}
 
 static inline void page_pool_iov_put_many(struct page_pool_iov *ppiov,
 					  unsigned int count)
 {
-	if (!refcount_sub_and_test(count, &ppiov->refcount))
-		return;
+	if (count > 1)
+		WARN_ON_ONCE(page_pool_iov_sub_and_test(ppiov, count - 1));
 
-	__page_pool_iov_free(ppiov);
+#ifdef CONFIG_PAGE_POOL
+	page_pool_put_defragged_page(ppiov->pp, page_pool_mangle_ppiov(ppiov),
+				     -1, false);
+#endif
 }
 
 /* page pool mm helpers */
