@@ -2384,6 +2384,13 @@ static int tcp_recvmsg_devmem(const struct sock *sk, const struct sk_buff *skb,
 			}
 
 			ppiov = skb_frag_page_pool_iov(frag);
+
+			/* Disallow non devmem owned buffers */
+			if (ppiov->pp->p.memory_provider != PP_MP_DMABUF_DEVMEM) {
+				err = -ENODEV;
+				goto out;
+			}
+
 			end = start + skb_frag_size(frag);
 			copy = end - offset;
 
