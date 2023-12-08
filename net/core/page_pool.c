@@ -21,6 +21,7 @@
 #include <linux/ethtool.h>
 #include <linux/netdevice.h>
 #include <linux/genalloc.h>
+#include <linux/io_uring/net.h>
 
 #include <trace/events/page_pool.h>
 
@@ -242,6 +243,11 @@ static int page_pool_init(struct page_pool *pool,
 	case PP_MP_DMABUF_DEVMEM:
 		pool->mp_ops = &dmabuf_devmem_ops;
 		break;
+#if defined(CONFIG_IO_URING)
+	case PP_MP_IOU_ZCRX:
+		pool->mp_ops = &io_uring_pp_zc_ops;
+		break;
+#endif
 	default:
 		err = -EINVAL;
 		goto free_ptr_ring;

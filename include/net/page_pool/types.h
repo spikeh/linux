@@ -129,6 +129,7 @@ struct mem_provider;
 enum pp_memory_provider_type {
 	__PP_MP_NONE, /* Use system allocator directly */
 	PP_MP_DMABUF_DEVMEM, /* dmabuf devmem provider */
+	PP_MP_IOU_ZCRX, /* io_uring zerocopy receive provider */
 };
 
 struct pp_memory_provider_ops {
