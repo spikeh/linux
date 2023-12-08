@@ -13,6 +13,11 @@ struct io_zc_rx_buf {
 };
 
 #if defined(CONFIG_IO_URING)
+
+#if defined(CONFIG_PAGE_POOL)
+extern const struct pp_memory_provider_ops io_uring_pp_zc_ops;
+#endif
+
 int io_uring_cmd_sock(struct io_uring_cmd *cmd, unsigned int issue_flags);
 
 #else

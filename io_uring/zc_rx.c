@@ -6,6 +6,7 @@
 #include <linux/io_uring.h>
 #include <linux/netdevice.h>
 #include <linux/nospec.h>
+#include <trace/events/page_pool.h>
 
 #include <uapi/linux/io_uring.h>
 
@@ -386,5 +387,208 @@ int io_register_zc_rx_sock(struct io_ring_ctx *ctx,
 	ifq->nr_sockets++;
 	return 0;
 }
+
+static inline struct io_zc_rx_buf *io_iov_to_buf(struct page_pool_iov *iov)
+{
+	return container_of(iov, struct io_zc_rx_buf, ppiov);
+}
+
+static inline unsigned io_buf_pgid(struct io_zc_rx_pool *pool,
+				   struct io_zc_rx_buf *buf)
+{
+	return buf - pool->bufs;
+}
+
+static __maybe_unused void io_zc_rx_get_buf_uref(struct io_zc_rx_buf *buf)
+{
+	refcount_add(IO_ZC_RX_UREF, &buf->ppiov.refcount);
+}
+
+static bool io_zc_rx_put_buf_uref(struct io_zc_rx_buf *buf)
+{
+	if (page_pool_iov_refcount(&buf->ppiov) < IO_ZC_RX_UREF)
+		return false;
+
+	return page_pool_iov_sub_and_test(&buf->ppiov, IO_ZC_RX_UREF);
+}
+
+static inline struct page *io_zc_buf_to_pp_page(struct io_zc_rx_buf *buf)
+{
+	return page_pool_mangle_ppiov(&buf->ppiov);
+}
+
+static inline void io_zc_add_pp_cache(struct page_pool *pp,
+				      struct io_zc_rx_buf *buf)
+{
+	refcount_set(&buf->ppiov.refcount, 1);
+	pp->alloc.cache[pp->alloc.count++] = io_zc_buf_to_pp_page(buf);
+}
+
+static inline u32 io_zc_rx_rqring_entries(struct io_zc_rx_ifq *ifq)
+{
+	struct io_rbuf_ring *ring = ifq->ring;
+	u32 entries;
+
+	entries = smp_load_acquire(&ring->rq.tail) - ifq->cached_rq_head;
+	return min(entries, ifq->rq_entries);
+}
+
+static void io_zc_rx_ring_refill(struct page_pool *pp,
+				 struct io_zc_rx_ifq *ifq)
+{
+	unsigned int entries = io_zc_rx_rqring_entries(ifq);
+	unsigned int mask = ifq->rq_entries - 1;
+	struct io_zc_rx_pool *pool = ifq->pool;
+
+	if (unlikely(!entries))
+		return;
+
+	while (entries--) {
+		unsigned int rq_idx = ifq->cached_rq_head++ & mask;
+		struct io_uring_rbuf_rqe *rqe = &ifq->rqes[rq_idx];
+		u32 pgid = rqe->off / PAGE_SIZE;
+		struct io_zc_rx_buf *buf = &pool->bufs[pgid];
+
+		if (!io_zc_rx_put_buf_uref(buf))
+			continue;
+		io_zc_add_pp_cache(pp, buf);
+		if (pp->alloc.count >= PP_ALLOC_CACHE_REFILL)
+			break;
+	}
+	smp_store_release(&ifq->ring->rq.head, ifq->cached_rq_head);
+}
+
+static void io_zc_rx_refill_slow(struct page_pool *pp, struct io_zc_rx_ifq *ifq)
+{
+	struct io_zc_rx_pool *pool = ifq->pool;
+
+	spin_lock_bh(&pool->freelist_lock);
+	while (pool->free_count && pp->alloc.count < PP_ALLOC_CACHE_REFILL) {
+		struct io_zc_rx_buf *buf;
+		u32 pgid;
+
+		pgid = pool->freelist[--pool->free_count];
+		buf = &pool->bufs[pgid];
+
+		io_zc_add_pp_cache(pp, buf);
+		pp->pages_state_hold_cnt++;
+		trace_page_pool_state_hold(pp, io_zc_buf_to_pp_page(buf),
+					   pp->pages_state_hold_cnt);
+	}
+	spin_unlock_bh(&pool->freelist_lock);
+}
+
+static void io_zc_rx_recycle_buf(struct io_zc_rx_pool *pool,
+				 struct io_zc_rx_buf *buf)
+{
+	spin_lock_bh(&pool->freelist_lock);
+	pool->freelist[pool->free_count++] = io_buf_pgid(pool, buf);
+	spin_unlock_bh(&pool->freelist_lock);
+}
+
+static struct page *io_pp_zc_alloc_pages(struct page_pool *pp, gfp_t gfp)
+{
+	struct io_zc_rx_ifq *ifq = pp->mp_priv;
+
+	/* pp should already be ensuring that */
+	if (unlikely(pp->alloc.count))
+		goto out_return;
+
+	io_zc_rx_ring_refill(pp, ifq);
+	if (likely(pp->alloc.count))
+		goto out_return;
+
+	io_zc_rx_refill_slow(pp, ifq);
+	if (!pp->alloc.count)
+		return NULL;
+out_return:
+	return pp->alloc.cache[--pp->alloc.count];
+}
+
+static bool io_pp_zc_release_page(struct page_pool *pp, struct page *page)
+{
+	struct io_zc_rx_ifq *ifq = pp->mp_priv;
+	struct page_pool_iov *ppiov;
+
+	if (WARN_ON_ONCE(!page_is_page_pool_iov(page)))
+		return false;
+
+	ppiov = page_to_page_pool_iov(page);
+
+	if (!page_pool_iov_sub_and_test(ppiov, 1))
+		return false;
+
+	io_zc_rx_recycle_buf(ifq->pool, io_iov_to_buf(ppiov));
+	return true;
+}
+
+static void io_pp_zc_scrub(struct page_pool *pp)
+{
+	struct io_zc_rx_ifq *ifq = pp->mp_priv;
+	struct io_zc_rx_pool *pool = ifq->pool;
+	struct io_zc_rx_buf *buf;
+	int i;
+
+	for (i = 0; i < pool->nr_bufs; i++) {
+		buf = &pool->bufs[i];
+
+		if (io_zc_rx_put_buf_uref(buf)) {
+			/* just return it to the page pool, it'll clean it up */
+			refcount_set(&buf->ppiov.refcount, 1);
+			page_pool_iov_put_many(&buf->ppiov, 1);
+		}
+	}
+}
+
+static void io_zc_rx_init_pool(struct io_zc_rx_pool *pool,
+			       struct page_pool *pp)
+{
+	struct io_zc_rx_buf *buf;
+	int i;
+
+	for (i = 0; i < pool->nr_bufs; i++) {
+		buf = &pool->bufs[i];
+		buf->ppiov.pp = pp;
+	}
+}
+
+static int io_pp_zc_init(struct page_pool *pp)
+{
+	struct io_zc_rx_ifq *ifq = pp->mp_priv;
+
+	if (!ifq)
+		return -EINVAL;
+	if (pp->p.order != 0)
+		return -EINVAL;
+	if (!pp->p.napi)
+		return -EINVAL;
+
+	io_zc_rx_init_pool(ifq->pool, pp);
+	percpu_ref_get(&ifq->ctx->refs);
+	ifq->pp = pp;
+	return 0;
+}
+
+static void io_pp_zc_destroy(struct page_pool *pp)
+{
+	struct io_zc_rx_ifq *ifq = pp->mp_priv;
+	struct io_zc_rx_pool *pool = ifq->pool;
+
+	ifq->pp = NULL;
+
+	if (WARN_ON_ONCE(pool->free_count != pool->nr_bufs))
+		return;
+	percpu_ref_put(&ifq->ctx->refs);
+}
+
+const struct pp_memory_provider_ops io_uring_pp_zc_ops = {
+	.alloc_pages		= io_pp_zc_alloc_pages,
+	.release_page		= io_pp_zc_release_page,
+	.init			= io_pp_zc_init,
+	.destroy		= io_pp_zc_destroy,
+	.scrub			= io_pp_zc_scrub,
+};
+EXPORT_SYMBOL(io_uring_pp_zc_ops);
+
 
 #endif
