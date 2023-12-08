@@ -125,6 +125,7 @@ struct page_pool_stats {
 #endif
 
 struct mem_provider;
+struct page_pool_iov;
 
 enum pp_memory_provider_type {
 	__PP_MP_NONE, /* Use system allocator directly */
@@ -138,6 +139,7 @@ struct pp_memory_provider_ops {
 	void (*scrub)(struct page_pool *pool);
 	struct page *(*alloc_pages)(struct page_pool *pool, gfp_t gfp);
 	bool (*release_page)(struct page_pool *pool, struct page *page);
+	dma_addr_t (*ppiov_dma_addr)(const struct page_pool_iov *ppiov);
 };
 
 extern const struct pp_memory_provider_ops dmabuf_devmem_ops;

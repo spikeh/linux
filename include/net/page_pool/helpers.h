@@ -105,10 +105,7 @@ static inline unsigned int page_pool_iov_idx(const struct page_pool_iov *ppiov)
 static inline dma_addr_t
 page_pool_iov_dma_addr(const struct page_pool_iov *ppiov)
 {
-	struct dmabuf_genpool_chunk_owner *owner = page_pool_iov_owner(ppiov);
-
-	return owner->base_dma_addr +
-	       ((dma_addr_t)page_pool_iov_idx(ppiov) << PAGE_SHIFT);
+	return ppiov->pp->mp_ops->ppiov_dma_addr(ppiov);
 }
 
 static inline unsigned long

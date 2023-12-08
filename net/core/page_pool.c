@@ -1105,10 +1105,19 @@ static bool mp_dmabuf_devmem_release_page(struct page_pool *pool,
 	return true;
 }
 
+static dma_addr_t mp_dmabuf_devmem_ppiov_dma_addr(const struct page_pool_iov *ppiov)
+{
+	struct dmabuf_genpool_chunk_owner *owner = page_pool_iov_owner(ppiov);
+
+	return owner->base_dma_addr +
+	       ((dma_addr_t)page_pool_iov_idx(ppiov) << PAGE_SHIFT);
+}
+
 const struct pp_memory_provider_ops dmabuf_devmem_ops = {
 	.init			= mp_dmabuf_devmem_init,
 	.destroy		= mp_dmabuf_devmem_destroy,
 	.alloc_pages		= mp_dmabuf_devmem_alloc_pages,
 	.release_page		= mp_dmabuf_devmem_release_page,
+	.ppiov_dma_addr		= mp_dmabuf_devmem_ppiov_dma_addr,
 };
 EXPORT_SYMBOL(dmabuf_devmem_ops);

@@ -600,12 +600,20 @@ static void io_pp_zc_destroy(struct page_pool *pp)
 	percpu_ref_put(&ifq->ctx->refs);
 }
 
+static dma_addr_t io_pp_zc_ppiov_dma_addr(const struct page_pool_iov *ppiov)
+{
+	struct io_zc_rx_buf *buf = io_iov_to_buf((struct page_pool_iov *)ppiov);
+
+	return buf->dma;
+}
+
 const struct pp_memory_provider_ops io_uring_pp_zc_ops = {
 	.alloc_pages		= io_pp_zc_alloc_pages,
 	.release_page		= io_pp_zc_release_page,
 	.init			= io_pp_zc_init,
 	.destroy		= io_pp_zc_destroy,
 	.scrub			= io_pp_zc_scrub,
+	.ppiov_dma_addr		= io_pp_zc_ppiov_dma_addr,
 };
 EXPORT_SYMBOL(io_uring_pp_zc_ops);
 
