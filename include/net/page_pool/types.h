@@ -134,6 +134,7 @@ enum pp_memory_provider_type {
 struct pp_memory_provider_ops {
 	int (*init)(struct page_pool *pool);
 	void (*destroy)(struct page_pool *pool);
+	void (*scrub)(struct page_pool *pool);
 	struct page *(*alloc_pages)(struct page_pool *pool, gfp_t gfp);
 	bool (*release_page)(struct page_pool *pool, struct page *page);
 };

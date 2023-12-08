@@ -947,6 +947,8 @@ static int page_pool_release(struct page_pool *pool)
 {
 	int inflight;
 
+	if (pool->mp_ops && pool->mp_ops->scrub)
+		pool->mp_ops->scrub(pool);
 	page_pool_scrub(pool);
 	inflight = page_pool_inflight(pool);
 	if (!inflight)
