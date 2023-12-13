@@ -922,9 +922,6 @@ static void page_pool_empty_alloc_cache_once(struct page_pool *pool)
 {
 	struct page *page;
 
-	if (pool->destroy_cnt)
-		return;
-
 	/* Empty alloc cache, assume caller made sure this is
 	 * no-longer in use, and page_pool_alloc_pages() cannot be
 	 * call concurrently.

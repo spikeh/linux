@@ -381,7 +381,7 @@ static inline long page_pool_defrag_page(struct page *page, long nr)
 	long ret;
 
 	if (page_is_page_pool_iov(page))
-		return -EINVAL;
+		return 0;
 
 	/* If nr == pp_frag_count then we have cleared all remaining
 	 * references to the page:
