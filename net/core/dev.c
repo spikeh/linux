@@ -2189,7 +2189,7 @@ int netdev_bind_dmabuf_to_queue(struct net_device *dev, u32 rxq_idx,
 
 	rxq = __netif_get_rx_queue(dev, rxq_idx);
 
-	if (rxq->binding)
+	if (rxq->binding || rxq->pp_ops)
 		return -EEXIST;
 
 	err = xa_alloc(&binding->bound_rxq_list, &xa_idx, rxq, xa_limit_32b,

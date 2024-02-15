@@ -26,6 +26,9 @@ struct netdev_rx_queue {
 	 */
 	struct napi_struct		*napi;
 	struct netdev_dmabuf_binding *binding;
+
+	const struct memory_provider_ops	*pp_ops;
+	void					*pp_private;
 } ____cacheline_aligned_in_smp;
 
 /*
