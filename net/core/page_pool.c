@@ -262,6 +262,9 @@ static int page_pool_init(struct page_pool *pool,
 	if (binding) {
 		pool->mp_ops = &dmabuf_devmem_ops;
 		pool->mp_priv = binding;
+	} else if (pool->p.queue && pool->p.queue->pp_ops) {
+		pool->mp_ops = pool->p.queue->pp_ops;
+		pool->mp_priv = pool->p.queue->pp_private;
 	}
 
 	if (pool->mp_ops) {
