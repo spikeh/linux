@@ -176,7 +176,7 @@ static struct ctl_table kernel_io_uring_disabled_table[] = {
 static inline void io_submit_flush_completions(struct io_ring_ctx *ctx)
 {
 	if (!wq_list_empty(&ctx->submit_state.compl_reqs) ||
-	    ctx->submit_state.cqes_count)
+	    ctx->submit_state.cqes_count || ctx->submit_state.flush_cqes)
 		__io_submit_flush_completions(ctx);
 }
 
@@ -1598,6 +1598,7 @@ void __io_submit_flush_completions(struct io_ring_ctx *ctx)
 		io_free_batch_list(ctx, state->compl_reqs.first);
 		INIT_WQ_LIST(&state->compl_reqs);
 	}
+	ctx->submit_state.flush_cqes = false;
 }
 
 static unsigned io_cqring_events(struct io_ring_ctx *ctx)
