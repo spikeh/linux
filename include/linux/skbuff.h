@@ -1007,6 +1007,7 @@ struct sk_buff {
 	__u8			csum_not_inet:1;
 #endif
 	__u8			dmabuf:1;
+	__u8			log:1;
 #if defined(CONFIG_NET_SCHED) || defined(CONFIG_NET_XGRESS)
 	__u16			tc_index;	/* traffic control index */
 #endif
