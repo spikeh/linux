@@ -270,8 +270,8 @@ static ssize_t link_device_store(const struct bus_type *bus, const char *buf, si
 	}
 
 	if (!netdev_is_nsim(dev_a)) {
-		pr_err("Device with ifindex %u in netnsfd %d is not a netdevsim\n",
-		       ifidx_a, netnsfd_a);
+		netdev_err(dev_a, "Device with ifindex %u in netnsfd %d is not a netdevsim\n",
+			   ifidx_a, netnsfd_a);
 		goto out_err;
 	}
 
@@ -283,13 +283,13 @@ static ssize_t link_device_store(const struct bus_type *bus, const char *buf, si
 	}
 
 	if (!netdev_is_nsim(dev_b)) {
-		pr_err("Device with ifindex %u in netnsfd %d is not a netdevsim\n",
-		       ifidx_b, netnsfd_b);
+		netdev_err(dev_b, "Device with ifindex %u in netnsfd %d is not a netdevsim\n",
+			   ifidx_b, netnsfd_b);
 		goto out_err;
 	}
 
 	if (dev_a == dev_b) {
-		pr_err("Cannot link a netdevsim to itself\n");
+		netdev_err(dev_a, "Cannot link a netdevsim to itself\n");
 		goto out_err;
 	}
 
@@ -297,16 +297,16 @@ static ssize_t link_device_store(const struct bus_type *bus, const char *buf, si
 	nsim_a = netdev_priv(dev_a);
 	peer = rtnl_dereference(nsim_a->peer);
 	if (peer) {
-		pr_err("Netdevsim %d:%u is already linked\n", netnsfd_a,
-		       ifidx_a);
+		netdev_err(dev_a, "Netdevsim %d:%u is already linked\n",
+			   netnsfd_a, ifidx_a);
 		goto out_err;
 	}
 
 	nsim_b = netdev_priv(dev_b);
 	peer = rtnl_dereference(nsim_b->peer);
 	if (peer) {
-		pr_err("Netdevsim %d:%u is already linked\n", netnsfd_b,
-		       ifidx_b);
+		netdev_err(dev_b, "Netdevsim %d:%u is already linked\n",
+			   netnsfd_b, ifidx_b);
 		goto out_err;
 	}
 
@@ -353,8 +353,8 @@ static ssize_t unlink_device_store(const struct bus_type *bus, const char *buf, 
 	}
 
 	if (!netdev_is_nsim(dev)) {
-		pr_err("Device with ifindex %u in netnsfd %d is not a netdevsim\n",
-		       ifidx, netnsfd);
+		netdev_err(dev, "Device with ifindex %u in netnsfd %d is not a netdevsim\n",
+			   ifidx, netnsfd);
 		goto out_put_netns;
 	}
 

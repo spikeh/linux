@@ -132,7 +132,7 @@ static int nsim_set_vf_rate(struct net_device *dev, int vf, int min, int max)
 	struct nsim_dev *nsim_dev = ns->nsim_dev;
 
 	if (nsim_esw_mode_is_switchdev(ns->nsim_dev)) {
-		pr_err("Not supported in switchdev mode. Please use devlink API.\n");
+		netdev_err(dev, "Not supported in switchdev mode. Please use devlink API.\n");
 		return -EOPNOTSUPP;
 	}
 

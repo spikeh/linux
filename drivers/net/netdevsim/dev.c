@@ -111,7 +111,7 @@ static ssize_t nsim_dev_take_snapshot_write(struct file *file,
 
 	err = devlink_region_snapshot_id_get(devlink, &id);
 	if (err) {
-		pr_err("Failed to get snapshot id\n");
+		nsim_err(nsim_dev, "Failed to get snapshot id\n");
 		kfree(dummy_data);
 		return err;
 	}
@@ -119,7 +119,7 @@ static ssize_t nsim_dev_take_snapshot_write(struct file *file,
 					     dummy_data, id);
 	devlink_region_snapshot_id_put(devlink, id);
 	if (err) {
-		pr_err("Failed to create region snapshot\n");
+		nsim_err(nsim_dev, "Failed to create region snapshot\n");
 		kfree(dummy_data);
 		return err;
 	}
@@ -428,6 +428,8 @@ static void nsim_dev_port_debugfs_exit(struct nsim_dev_port *nsim_dev_port)
 
 static int nsim_dev_resources_register(struct devlink *devlink)
 {
+	struct nsim_dev *nsim_dev = devlink_priv(devlink);
+
 	struct devlink_resource_size_params params = {
 		.size_max = (u64)-1,
 		.size_granularity = 1,
@@ -441,7 +443,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     DEVLINK_RESOURCE_ID_PARENT_TOP,
 				     &params);
 	if (err) {
-		pr_err("Failed to register IPv4 top resource\n");
+		nsim_err(nsim_dev, "Failed to register IPv4 top resource\n");
 		goto err_out;
 	}
 
@@ -449,7 +451,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     NSIM_RESOURCE_IPV4_FIB,
 				     NSIM_RESOURCE_IPV4, &params);
 	if (err) {
-		pr_err("Failed to register IPv4 FIB resource\n");
+		nsim_err(nsim_dev, "Failed to register IPv4 FIB resource\n");
 		goto err_out;
 	}
 
@@ -457,7 +459,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     NSIM_RESOURCE_IPV4_FIB_RULES,
 				     NSIM_RESOURCE_IPV4, &params);
 	if (err) {
-		pr_err("Failed to register IPv4 FIB rules resource\n");
+		nsim_err(nsim_dev, "Failed to register IPv4 FIB rules resource\n");
 		goto err_out;
 	}
 
@@ -467,7 +469,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     DEVLINK_RESOURCE_ID_PARENT_TOP,
 				     &params);
 	if (err) {
-		pr_err("Failed to register IPv6 top resource\n");
+		nsim_err(nsim_dev, "Failed to register IPv6 top resource\n");
 		goto err_out;
 	}
 
@@ -475,7 +477,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     NSIM_RESOURCE_IPV6_FIB,
 				     NSIM_RESOURCE_IPV6, &params);
 	if (err) {
-		pr_err("Failed to register IPv6 FIB resource\n");
+		nsim_err(nsim_dev, "Failed to register IPv6 FIB resource\n");
 		goto err_out;
 	}
 
@@ -483,7 +485,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     NSIM_RESOURCE_IPV6_FIB_RULES,
 				     NSIM_RESOURCE_IPV6, &params);
 	if (err) {
-		pr_err("Failed to register IPv6 FIB rules resource\n");
+		nsim_err(nsim_dev, "Failed to register IPv6 FIB rules resource\n");
 		goto err_out;
 	}
 
@@ -493,7 +495,7 @@ static int nsim_dev_resources_register(struct devlink *devlink)
 				     DEVLINK_RESOURCE_ID_PARENT_TOP,
 				     &params);
 	if (err) {
-		pr_err("Failed to register NEXTHOPS resource\n");
+		nsim_err(nsim_dev, "Failed to register NEXTHOPS resource\n");
 		goto err_out;
 	}
 	return 0;
@@ -603,7 +605,8 @@ static int nsim_esw_switchdev_enable(struct nsim_dev *nsim_dev,
 		err = __nsim_dev_port_add(nsim_dev, NSIM_DEV_PORT_TYPE_VF, i);
 		if (err) {
 			NL_SET_ERR_MSG_MOD(extack, "Failed to initialize VFs' netdevsim ports");
-			pr_err("Failed to initialize VF id=%d. %d.\n", i, err);
+			nsim_err(nsim_dev, "Failed to initialize VF id=%d. %d.\n",
+				 i, err);
 			goto err_port_add_vfs;
 		}
 	}

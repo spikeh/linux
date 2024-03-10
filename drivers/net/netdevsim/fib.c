@@ -1587,7 +1587,7 @@ struct nsim_fib_data *nsim_fib_create(struct devlink *devlink,
 	err = register_nexthop_notifier(devlink_net(devlink), &data->nexthop_nb,
 					extack);
 	if (err) {
-		pr_err("Failed to register nexthop notifier\n");
+		nsim_err(nsim_dev, "Failed to register nexthop notifier\n");
 		goto err_rhashtable_fib_destroy;
 	}
 
@@ -1595,7 +1595,7 @@ struct nsim_fib_data *nsim_fib_create(struct devlink *devlink,
 	err = register_fib_notifier(devlink_net(devlink), &data->fib_nb,
 				    nsim_fib_dump_inconsistent, extack);
 	if (err) {
-		pr_err("Failed to register fib notifier\n");
+		nsim_err(nsim_dev, "Failed to register fib notifier\n");
 		goto err_nexthop_nb_unregister;
 	}
 

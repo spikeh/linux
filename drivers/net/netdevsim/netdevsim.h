@@ -36,6 +36,9 @@
 #define NSIM_IPSEC_VALID		BIT(31)
 #define NSIM_UDP_TUNNEL_N_PORTS		4
 
+#define nsim_err(ns_dev, args...)	\
+	dev_err(&(ns_dev)->nsim_bus_dev->dev, ##args)
+
 struct nsim_sa {
 	struct xfrm_state *xs;
 	__be32 ipaddr[4];
