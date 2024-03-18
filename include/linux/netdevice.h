@@ -52,6 +52,7 @@
 #include <net/net_trackers.h>
 #include <net/net_debug.h>
 #include <net/dropreason-core.h>
+#include <net/netdev_cfg.h>
 
 struct netpoll_info;
 struct device;
@@ -2426,6 +2427,8 @@ struct net_device {
 	/** @page_pools: page pools created for this netdevice */
 	struct hlist_head	page_pools;
 #endif
+struct netdev_nic_cfg_info nic_cfg_info;
+struct netdev_nic_cfg *nic_cfg;
 };
 #define to_net_dev(d) container_of(d, struct net_device, dev)
 
