@@ -2134,26 +2134,25 @@ static u32 fbnic_get_rxfh_key_size(struct net_device *netdev)
 	return FBNIC_RPC_RSS_KEY_BYTE_LEN;
 }
 
-static int fbnic_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
-			  u8 *hfunc)
+static int fbnic_get_rxfh(struct net_device *netdev,
+			  struct ethtool_rxfh_param *rxfh)
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
 	unsigned int i;
 
-	if (hfunc)
-		*hfunc = ETH_RSS_HASH_TOP;
+	rxfh->hfunc = ETH_RSS_HASH_TOP;
 
-	if (key) {
+	if (rxfh->key) {
 		for (i = 0; i < FBNIC_RPC_RSS_KEY_BYTE_LEN; i++) {
 			u32 rss_key = fbn->rss_key[i / 4] << ((i % 4) * 8);
 
-			key[i] = rss_key >> 24;
+			rxfh->key[i] = rss_key >> 24;
 		}
 	}
 
-	if (indir) {
+	if (rxfh->indir) {
 		for (i = 0; i < FBNIC_RPC_RSS_TBL_SIZE; i++)
-			indir[i] = fbn->indir_tbl[0][i];
+			rxfh->indir[i] = fbn->indir_tbl[0][i];
 	}
 
 	return 0;
@@ -2174,21 +2173,22 @@ static bool fbnic_indir_set(struct fbnic_net *fbn, int idx, const u32 *indir)
 	return !!changes;
 }
 
-static int fbnic_set_rxfh(struct net_device *netdev, const u32 *indir,
-			  const u8 *key, const u8 hfunc)
+static int fbnic_set_rxfh(struct net_device *netdev,
+			  struct ethtool_rxfh_param *rxfh,
+			  struct netlink_ext_ack *extack)
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
 	unsigned int i, changes = 0;
 
-	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP)
+	if (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE && rxfh->hfunc != ETH_RSS_HASH_TOP)
 		return -EINVAL;
 
-	if (key) {
+	if (rxfh->key) {
 		u32 rss_key = 0;
 
 		for (i = FBNIC_RPC_RSS_KEY_BYTE_LEN; i--;) {
 			rss_key >>= 8;
-			rss_key |= (u32)(key[i]) << 24;
+			rss_key |= (u32)(rxfh->key[i]) << 24;
 
 			if (i % 4)
 				continue;
@@ -2204,62 +2204,10 @@ static int fbnic_set_rxfh(struct net_device *netdev, const u32 *indir,
 		}
 	}
 
-	if (indir)
-		changes += fbnic_indir_set(fbn, 0, indir);
+	if (rxfh->indir)
+		changes += fbnic_indir_set(fbn, 0, rxfh->indir);
 
 	if (changes && netif_running(netdev))
-		fbnic_rss_reinit_hw(fbn->fbd, fbn);
-
-	return 0;
-}
-
-static int
-fbnic_get_rxfh_context(struct net_device *netdev, u32 *indir, u8 *key,
-		       u8 *hfunc, u32 rss_context)
-{
-	struct fbnic_net *fbn = netdev_priv(netdev);
-	unsigned int i;
-
-	if (rss_context >= FBNIC_RPC_RSS_TBL_COUNT)
-		return -EINVAL;
-
-	if (hfunc)
-		*hfunc = ETH_RSS_HASH_TOP;
-
-	if (key) {
-		for (i = 0; i < FBNIC_RPC_RSS_KEY_BYTE_LEN; i++) {
-			u32 rss_key = fbn->rss_key[i / 4] << ((i % 4) * 8);
-
-			key[i] = rss_key >> 24;
-		}
-	}
-
-	if (indir) {
-		for (i = 0; i < FBNIC_RPC_RSS_TBL_SIZE; i++)
-			indir[i] = fbn->indir_tbl[rss_context][i];
-	}
-
-	return 0;
-}
-
-static int
-fbnic_set_rxfh_context(struct net_device *netdev, const u32 *indir,
-		       const u8 *key, const u8 hfunc, u32 *rss_context,
-		       bool delete)
-{
-	struct fbnic_net *fbn = netdev_priv(netdev);
-	unsigned int idx = *rss_context;
-
-	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP)
-		return -EINVAL;
-
-	if (idx >= FBNIC_RPC_RSS_TBL_COUNT)
-		return -EINVAL;
-
-	if (key || delete)
-		return -EOPNOTSUPP;
-
-	if (indir && fbnic_indir_set(fbn, idx, indir) && netif_running(netdev))
 		fbnic_rss_reinit_hw(fbn->fbd, fbn);
 
 	return 0;
@@ -3126,8 +3074,6 @@ static const struct ethtool_ops fbnic_ethtool_ops = {
 	.get_rxfh_key_size	= fbnic_get_rxfh_key_size,
 	.get_rxfh		= fbnic_get_rxfh,
 	.set_rxfh		= fbnic_set_rxfh,
-	.get_rxfh_context	= fbnic_get_rxfh_context,
-	.set_rxfh_context	= fbnic_set_rxfh_context,
 	.get_coalesce		= fbnic_get_coalesce,
 	.set_coalesce		= fbnic_set_coalesce,
 	.get_pauseparam		= fbnic_get_pauseparam,

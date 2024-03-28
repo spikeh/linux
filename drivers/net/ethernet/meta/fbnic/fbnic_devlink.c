@@ -603,21 +603,17 @@ static int fbnic_fw_reporter_dump(struct devlink_health_reporter *reporter,
 
 coredump_complete:
 	/* Create wrapper for binary data */
-	err = devlink_fmsg_binary_pair_nest_start(fmsg, "FW coredump");
-	if (err)
-		goto cmpl_cleanup;
+	devlink_fmsg_binary_pair_nest_start(fmsg, "FW coredump");
 
 	/* Copy dump data in page size chunks */
 	for (offset = 0; offset < size; offset += length) {
 		length = min_t(u32, size - offset, TLV_MAX_DATA);
 
-		err = devlink_fmsg_binary_put(fmsg, dump_data + offset, length);
-		if (err)
-			break;
+		devlink_fmsg_binary_put(fmsg, dump_data + offset, length);
 	}
 
 	/* Close binary data */
-	err = devlink_fmsg_binary_pair_nest_end(fmsg);
+	devlink_fmsg_binary_pair_nest_end(fmsg);
 
 cmpl_cleanup:
 	fbd->cmpl_data = NULL;
