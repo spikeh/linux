@@ -765,8 +765,8 @@ static void fbnic_page_pool_drain(struct fbnic_ring *ring, unsigned int idx,
 	struct fbnic_rx_buf *rx_buf = &ring->rx_buf[idx];
 	struct page *page = rx_buf->page;
 
-	if (!page_pool_defrag_page(page, rx_buf->pagecnt_bias))
-		page_pool_put_defragged_page(nv->page_pool, page, -1, !!budget);
+	if (!page_pool_unref_page(page, rx_buf->pagecnt_bias))
+		page_pool_put_unrefed_page(nv->page_pool, page, -1, !!budget);
 
 	rx_buf->page = NULL;
 }
@@ -774,8 +774,8 @@ static void fbnic_page_pool_drain(struct fbnic_ring *ring, unsigned int idx,
 static void fbnic_xdp_free_page(struct fbnic_napi_vector *nv,
 				struct page *page, int budget)
 {
-	if (!page_pool_defrag_page(page, 1))
-		page_pool_put_defragged_page(nv->page_pool, page, -1, !!budget);
+	if (!page_pool_unref_page(page, 1))
+		page_pool_put_unrefed_page(nv->page_pool, page, -1, !!budget);
 }
 
 static void fbnic_clean_twq1(struct fbnic_napi_vector *nv, int napi_budget,
@@ -1748,7 +1748,7 @@ static void fbnic_name_napi_vector(struct fbnic_napi_vector *nv)
 }
 
 #define FBNIC_PAGE_POOL_FLAGS \
-	(PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV | PP_FLAG_PAGE_FRAG)
+	(PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV)
 
 static int fbnic_alloc_nv_page_pool(struct fbnic_net *fbn,
 				    struct fbnic_napi_vector *nv)
