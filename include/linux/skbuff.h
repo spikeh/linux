@@ -3519,13 +3519,13 @@ int skb_pp_cow_data(struct page_pool *pool, struct sk_buff **pskb,
 		    unsigned int headroom);
 int skb_cow_data_for_xdp(struct page_pool *pool, struct sk_buff **pskb,
 			 struct bpf_prog *prog);
-bool napi_pp_put_page(struct page *page);
+bool napi_pp_put_page(netmem_ref netmem);
 
 static inline void
 skb_page_unref(struct page *page, bool recycle)
 {
 #ifdef CONFIG_PAGE_POOL
-	if (recycle && napi_pp_put_page(page))
+	if (recycle && napi_pp_put_page(page_to_netmem(page)))
 		return;
 #endif
 	put_page(page);
