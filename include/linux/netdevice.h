@@ -1612,19 +1612,34 @@ struct net_device_ops {
 	int			(*ndo_hwtstamp_set)(struct net_device *dev,
 						    struct kernel_hwtstamp_config *kernel_config,
 						    struct netlink_ext_ack *extack);
-	void *			(*ndo_queue_mem_alloc)(struct net_device *dev,
+	void *			(*ndo_tx_queue_mem_alloc)(struct net_device *dev,
+						       const struct netdev_cfg *dcfg,
+						       const struct netdev_txq_cfg *qcfg,
+						       void *qmem,
+						       int idx);
+	void			(*ndo_tx_queue_mem_free)(struct net_device *dev,
+						      const struct netdev_cfg *dcfg,
+						      const struct netdev_txq_cfg *qcfg,
+						      void *qmem);
+	int			(*ndo_tx_queue_start)(struct net_device *dev,
+						   int idx,
+						   void *queue_mem);
+	int			(*ndo_tx_queue_stop)(struct net_device *dev,
+						  int idx,
+						  void **out_queue_mem);
+	void *			(*ndo_rx_queue_mem_alloc)(struct net_device *dev,
 						       const struct netdev_cfg *dcfg,
 						       const struct netdev_rxq_cfg *qcfg,
 						       void *qmem,
 						       int idx);
-	void			(*ndo_queue_mem_free)(struct net_device *dev,
+	void			(*ndo_rx_queue_mem_free)(struct net_device *dev,
 						      const struct netdev_cfg *dcfg,
 						      const struct netdev_rxq_cfg *qcfg,
 						      void *qmem);
-	int			(*ndo_queue_start)(struct net_device *dev,
+	int			(*ndo_rx_queue_start)(struct net_device *dev,
 						   int idx,
 						   void *queue_mem);
-	int			(*ndo_queue_stop)(struct net_device *dev,
+	int			(*ndo_rx_queue_stop)(struct net_device *dev,
 						  int idx,
 						  void **out_queue_mem);
 };

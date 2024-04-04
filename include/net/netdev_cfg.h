@@ -3,6 +3,7 @@
 #define _LINUX_NETDEV_CFG_H
 
 #include <linux/ethtool.h>
+#include <net/page_pool/types.h>
 
 /**
  * struct netdev_cfg - datapath configuration for struct net_device
@@ -15,6 +16,10 @@ struct netdev_cfg {
 	struct ethtool_channels chan;
 };
 
+struct netdev_txq_cfg {
+	struct ethtool_ringparam ring;
+};
+
 /**
  * struct netdev_rxq_cfg - datapath configuration for an Rx queue
  */
@@ -25,13 +30,16 @@ struct netdev_rxq_cfg {
 	 */
 	struct ethtool_ringparam ring;
 	struct kernel_ethtool_ringparam kring;
+	struct page_pool_params pp;
 };
 
 /**
  * struct netdev_nic_cfg - NIC datapath config parameters
+ * @rxq_cfg_size: size of the private struct holding queue mem alloc state (Rx)
  * @rxq_mem_size: size of the private struct holding queue memory (Rx)
  */
 struct netdev_nic_cfg_info {
+	unsigned int txq_mem_size;
 	unsigned int rxq_mem_size;
 };
 
@@ -43,6 +51,10 @@ struct netdev_nic_cfg {
 	struct netdev_cfg cfg;
 
 	/* dynamic state */
+	struct netdev_txq_cfg tqcfg;
+	unsigned int txq_cnt;
+	void *txqmem;
+
 	struct netdev_rxq_cfg rqcfg;
 	unsigned int rxq_cnt;
 	void *rxqmem;
