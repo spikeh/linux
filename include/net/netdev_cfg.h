@@ -31,6 +31,8 @@ struct netdev_rxq_cfg {
 	 */
 	struct ethtool_ringparam ring;
 	struct kernel_ethtool_ringparam kring;
+	// default pp for all queues
+	// need a get/set?
 	struct page_pool_params pp;
 };
 
@@ -55,16 +57,19 @@ struct netdev_nic_cfg {
 	struct netdev_txq_cfg tqcfg;
 	unsigned int txq_cnt;
 	void *txqmem;
+	int txq_idx;
 
 	struct netdev_rxq_cfg rqcfg;
 	unsigned int rxq_cnt;
 	void *rxqmem;
+	int rxq_idx;
 
 	/* global parameters */
 	struct ethtool_ringparam ring;
 	struct kernel_ethtool_ringparam kring;
 
 	/* Clone when replacing */
+	bool recfg;
 	struct netdev_nic_cfg *other_cfg;
 };
 
@@ -76,8 +81,11 @@ void netdev_nic_cfg_deinit(struct net_device *netdev);
 int netdev_nic_cfg_start(struct net_device *netdev);
 void netdev_nic_cfg_stop(struct net_device *netdev);
 
-void *netdev_nic_cfg_txqmem(struct net_device *netdev, unsigned int qid);
-void *netdev_nic_cfg_rxqmem(struct net_device *netdev, unsigned int qid);
+void netdev_nic_cfg_restart_txq(struct net_device *netdev, unsigned int qid);
+void netdev_nic_cfg_restart_rxq(struct net_device *netdev, unsigned int qid);
+
+void *netdev_nic_cfg_txqmem(struct net_device *netdev, struct netdev_nic_cfg *nic, unsigned int qid);
+void *netdev_nic_cfg_rxqmem(struct net_device *netdev, struct netdev_nic_cfg *nic, unsigned int qid);
 
 /* Runtime config */
 int netdev_nic_recfg_start(struct net_device *netdev);

@@ -594,7 +594,7 @@ fbnic_features_check(struct sk_buff *skb, struct net_device *dev,
 	return fbnic_features_check_encap_gso(skb, dev, features, l3len);
 }
 
-static void fbnic_clean_twq0(struct fbnic_napi_vector *nv, int napi_budget,
+void fbnic_clean_twq0(struct fbnic_napi_vector *nv, int napi_budget,
 			     struct fbnic_ring *ring, bool discard,
 			     unsigned int hw_head)
 {
@@ -742,8 +742,9 @@ static void fbnic_clean_tsq(struct fbnic_napi_vector *nv,
 static void fbnic_page_pool_init(struct fbnic_ring *ring, unsigned int idx,
 				 struct page *page)
 {
-	struct fbnic_rx_buf *rx_buf = &ring->rx_buf[idx];
+	struct fbnic_rx_buf *rx_buf;
 
+	rx_buf = &ring->rx_buf[idx];
 	page_pool_fragment_page(page, PAGECNT_BIAS_MAX);
 	rx_buf->pagecnt_bias = PAGECNT_BIAS_MAX;
 	rx_buf->page = page;
@@ -778,7 +779,7 @@ static void fbnic_xdp_free_page(struct fbnic_napi_vector *nv,
 		page_pool_put_unrefed_page(nv->page_pool, page, -1, !!budget);
 }
 
-static void fbnic_clean_twq1(struct fbnic_napi_vector *nv, int napi_budget,
+void fbnic_clean_twq1(struct fbnic_napi_vector *nv, int napi_budget,
 			     struct fbnic_ring *ring, bool discard,
 			     unsigned int hw_head)
 {
@@ -940,10 +941,17 @@ static struct page *fbnic_alloc_mapped_page(struct fbnic_napi_vector *nv)
 	return page;
 }
 
-static __le64 fbnic_bd_prep(struct page *page, u16 id)
+static __le64 fbnic_bd_prep(struct page *page, u16 id, bool log)
 {
 	dma_addr_t dma = page_pool_get_dma_addr(page);
 	u64 bd;
+
+	/*
+	if (log)
+		printk("----- fbnic_bd_prep: dma addr=0x%llx\n", dma);
+	*/
+
+	trace_printk("----- fbnic_bd_prep: dma addr=0x%llx\n", dma);
 
 	bd = (FBNIC_BD_PAGE_ADDR_MASK & dma) |
 	     FIELD_PREP(FBNIC_BD_PAGE_ID_MASK, id);
@@ -955,9 +963,12 @@ void fbnic_fill_bdq(struct fbnic_napi_vector *nv, struct fbnic_ring *bdq)
 {
 	unsigned int count = fbnic_desc_unused(bdq);
 	unsigned int i = bdq->tail;
+	// FIXME: maybe the ring needs to have head/tail reset?
 
 	if (!count)
 		return;
+
+	//printk("----- fbnic_fill_bdq: nv=%px, count=%lu, bdq->tail=%lu\n", nv, count, i);
 
 	do {
 		struct page *page;
@@ -975,7 +986,7 @@ void fbnic_fill_bdq(struct fbnic_napi_vector *nv, struct fbnic_ring *bdq)
 		fbnic_page_pool_init(bdq, i, page);
 
 		bd = &bdq->desc[i];
-		*bd = fbnic_bd_prep(page, i);
+		*bd = fbnic_bd_prep(page, i, i == bdq->tail);
 
 		i++;
 		i &= bdq->size_mask;
@@ -1086,7 +1097,7 @@ static void fbnic_add_rx_frag(struct fbnic_napi_vector *nv, u64 rcd,
 	xdp->data_len += len;
 }
 
-static void fbnic_put_xdp_buff(struct fbnic_napi_vector *nv,
+void fbnic_put_xdp_buff(struct fbnic_napi_vector *nv,
 			       struct fbnic_xdp_buff *xdp, int budget)
 {
 	struct skb_shared_info *shinfo;
@@ -1439,11 +1450,12 @@ static int fbnic_clean_rcq(struct fbnic_napi_vector *nv,
 	return packets;
 }
 
-static void fbnic_nv_irq_disable(struct fbnic_napi_vector *nv)
+void fbnic_nv_irq_disable(struct fbnic_napi_vector *nv)
 {
 	struct fbnic_dev *fbd = nv->fbd;
 	u32 v_idx = nv->v_idx;
 
+	//printk("----- nv_irq_disable: v_idx=%lu\n", v_idx);
 	wr32(FBNIC_INTR_MASK_SET(v_idx / 32), 1 << (v_idx % 32));
 }
 
@@ -1452,6 +1464,7 @@ static void fbnic_nv_irq_rearm(struct fbnic_napi_vector *nv)
 	struct fbnic_dev *fbd = nv->fbd;
 	u32 v_idx = nv->v_idx;
 
+	//printk("----- nv_irq_rearm: v_idx=%lu\n", v_idx);
 	wr32(FBNIC_INTR_CQ_REARM(v_idx), FBNIC_INTR_CQ_REARM_INTR_UNMASK);
 }
 
@@ -1579,7 +1592,12 @@ static int fbnic_poll(struct napi_struct *napi, int budget)
 	if (work_done == budget)
 		return budget;
 
+	// TODO: check that we're not stopping a queue here
 	if (likely(napi_complete_done(napi, work_done))) {
+		if (nv->disabled) {
+			printk("----- fbnic_poll: complete but no longer scheduled, not rearming irq\n");
+			return 0;
+		}
 		fbnic_nv_rx_dim_update(nv);
 		fbnic_nv_tx_dim_update(nv);
 		fbnic_nv_irq_rearm(nv);
@@ -1838,7 +1856,7 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 	else
 		nv->type = FBNIC_NV_TYPE_RX_ONLY;
 
-	printk("----- alloc_nv: v_idx=%d, type=%d, txt_cnt=%d, rxt_cnt=%d\n", v_idx, nv->type, txt_count, rxt_count);
+	printk("----- alloc_nv: nv=%px, v_idx=%d, type=%d, txt_cnt=%d, rxt_cnt=%d, napi_struct=%px\n", nv, v_idx, nv->type, txt_count, rxt_count, &nv->napi);
 
 	/* record queue triad counts */
 	nv->txt_count = txt_count;
@@ -1872,6 +1890,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 	fbnic_name_napi_vector(nv);
 
 	/* request the IRQ for napi vector */
+	// FIXME: this is where msix irq stuff happens
+	// NOTE: wait, how does set_channels re-use this before bringing down device?
 	vector = fbd->msix_entries[v_idx].vector;
 	err = request_irq(vector, &fbnic_msix_clean_rings, IRQF_SHARED,
 			  nv->name, nv);
@@ -1885,6 +1905,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 		/* Configure Tx queue */
 		db = &uc_addr[FBNIC_QUEUE(txq_idx) + FBNIC_QUEUE_TWQ0_TAIL];
 
+		// if txt_count was set to 1 even tho txq_count is 0 because rxq_count > 0
+		// then disable the tx ring
 		/* Assign Tx queue to netdev if applicable */
 		if (txq_count > 0) {
 			u8 flags = FBNIC_RING_F_CTX | FBNIC_RING_F_STATS;
@@ -1892,6 +1914,7 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 			if (test_bit(txq_idx, fbn->edt))
 				flags |= FBNIC_RING_F_EDT;
 
+			// NOTE: sets doorbell/q_idx/flags
 			fbnic_ring_init(&qt->sub0, db, txq_idx, flags);
 			fbn->tx[txq_idx] = &qt->sub0;
 			txq_count--;
@@ -1911,6 +1934,7 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 		 * 3. The hardware side is associated based on the Tx Queue.
 		 * 4. The netdev queue is offset by FBNIC_MAX_TXQs.
 		 */
+		// xdp_count is only set if rxq_count > 0
 		if (xdp_count > 0) {
 			u8 flags = FBNIC_RING_F_CTX | FBNIC_RING_F_STATS;
 			unsigned int xdp_idx = FBNIC_MAX_TXQS + rxq_idx;
@@ -1930,6 +1954,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 		/* Update Tx queue index */
 		txt_count--;
 		txq_idx += v_count;
+
+		printk("----- alloc_nv: tx qt done, sub0=%d, sub1=%d, cmpl=%d\n", (bool)(qt->sub0.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->sub1.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->cmpl.flags | FBNIC_RING_F_DISABLED == 0));
 
 		/* move to next queue triad */
 		qt++;
@@ -1956,6 +1982,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 		rxt_count--;
 		rxq_idx += v_count;
 
+		printk("----- alloc_nv: rx qt done, sub0=%d, sub1=%d, cmpl=%d\n", (bool)(qt->sub0.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->sub1.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->cmpl.flags | FBNIC_RING_F_DISABLED == 0));
+
 		/* move to next queue triad */
 		qt++;
 	}
@@ -1981,7 +2009,18 @@ int fbnic_alloc_napi_vectors(struct fbnic_net *fbn)
 	struct fbnic_dev *fbd = fbn->fbd;
 	int err;
 
+	// rx 10 tx 10 combined 0 -> rx 10, tx 10, napi 20
+	// rx 20 tx 10 combined 0 -> rx 10, combined 10, napi 20
+	// rx 10 tx 20 combined 0 -> tx 10, combined 10, napi 20
+	// rx 10 tx 0 combined 10 -> rx 10, combined 10, napi 20
+	// rx 0 tx 10 combined 10 -> tx 10, combined 10, napi 20
 	/* Allocate 1 Tx queue per napi vector */
+	// NOTE: if num_napi == num_tx + num_rx (e.g. rx 10, tx 10)
+	// then tx comes first, then rx
+	// the rx triads have xdp ring + tx cmpl ring
+	//
+	// NOTE: fbn here is clone
+	printk("----- alloc_napi_vectors: num_tx=%d, num_rx=%d, num_napi=%d\n", num_tx, num_rx, num_napi);
 	if (num_napi < FBNIC_MAX_TXQS && num_napi == num_tx + num_rx) {
 		while (num_tx) {
 			err = fbnic_alloc_napi_vector(fbd, fbn,
@@ -1998,6 +2037,9 @@ int fbnic_alloc_napi_vectors(struct fbnic_net *fbn)
 		}
 	}
 
+	// NOTE: in all other cases, combined come first, then remaining tx/rx
+	// FIXME: no! new entries are added to head, so we traverse in REVERSE
+	// so the solo queues come FIRST, then the combined
 	/* Allocate Tx/Rx queue pairs per vector, or allocate remaining Rx */
 	while (num_rx | num_tx) {
 		int tqpv = DIV_ROUND_UP(num_tx, num_napi - txq_idx);
@@ -2036,6 +2078,7 @@ static void fbnic_free_ring_resources(struct device *dev,
 	if (!ring->size)
 		return;
 
+	printk("----- free_ring_resources: dma_free_coherent dma addr=0x%llx, size=%lu\n", ring->dma, ring->size);
 	dma_free_coherent(dev, ring->size, ring->desc, ring->dma);
 	ring->size_mask = 0;
 	ring->size = 0;
@@ -2048,17 +2091,15 @@ int fbnic_alloc_tx_ring_desc(struct fbnic_ring *txr,
 	size_t txq_size = param->tx_pending;
 	size_t size;
 
-	/* round size up to nearest 4K */
+	// round size up to nearest 4K
 	size = ALIGN(array_size(sizeof(*txr->desc), txq_size), 4096);
-
-	printk("----- alloc_tx_ring_desc: dev=%px, size=%d, txr=%px\n", dev, size, txr);
-
 	txr->desc = dma_alloc_coherent(dev, size, &txr->dma,
 				       GFP_KERNEL | __GFP_NOWARN);
+	printk("----- alloc_tx_ring_desc: desc ring dma addr=0x%llx, size=%lu\n", txr->dma, size);
 	if (!txr->desc)
 		return -ENOMEM;
 
-	/* txq_size should be a power of 2, so mask is just that -1 */
+	// txq_size should be a power of 2, so mask is just that -1
 	txr->size_mask = txq_size - 1;
 	txr->size = size;
 
@@ -2076,6 +2117,7 @@ static int __fbnic_alloc_tx_ring_desc(struct fbnic_net *fbn,
 
 	txr->desc = dma_alloc_coherent(dev, size, &txr->dma,
 				       GFP_KERNEL | __GFP_NOWARN);
+	printk("----- alloc_tx_ring_desc: desc ring dma addr=0x%llx, size=%lu\n", txr->dma, size);
 	if (!txr->desc)
 		return -ENOMEM;
 
@@ -2134,6 +2176,7 @@ int fbnic_alloc_rx_ring_desc(struct fbnic_ring *rxr,
 
 	rxr->desc = dma_alloc_coherent(dev, size, &rxr->dma,
 				       GFP_KERNEL | __GFP_NOWARN);
+	printk("----- alloc_rx_ring_desc: desc ring dma addr=0x%llx, size=%lu\n", rxr->dma, size);
 	if (!rxr->desc)
 		return -ENOMEM;
 
@@ -2172,6 +2215,7 @@ static int __fbnic_alloc_rx_ring_desc(struct fbnic_net *fbn,
 
 	rxr->desc = dma_alloc_coherent(dev, size, &rxr->dma,
 				       GFP_KERNEL | __GFP_NOWARN);
+	printk("----- alloc_rx_ring_desc: desc ring dma addr=0x%llx, size=%lu\n", rxr->dma, size);
 	if (!rxr->desc)
 		return -ENOMEM;
 
@@ -2286,17 +2330,25 @@ static void fbnic_free_nv_resources(struct fbnic_net *fbn,
 {
 	int i, j;
 
-	/* Free Tx Resources  */
+	/* Free Tx Resources
 	for (i = 0; i < nv->txt_count; i++)
 		fbnic_free_qt_resources(fbn, &nv->qt[i]);
+	*/
 
-	for (j = 0; j < nv->rxt_count; j++, i++) {
-		fbnic_free_qt_resources(fbn, &nv->qt[i]);
+	for (i = nv->txt_count, j = 0; j < nv->rxt_count; j++, i++) {
+		//fbnic_free_qt_resources(fbn, &nv->qt[i]);
 		xdp_rxq_info_unreg_mem_model(&nv->qt[i].xdp_rxq);
 #ifndef HAVE_XDP_UNREG_FIX
 		memset(&nv->qt[i].xdp_rxq.mem, 0, sizeof(struct xdp_mem_info));
 #endif
 	}
+}
+
+static void __fbnic_reset_ring(struct fbnic_ring *ring)
+{
+	ring->head = 0;
+	ring->tail = 0;
+	memset(&ring->stats, 0, sizeof(ring->stats));
 }
 
 static void __fbnic_swap_ring_mem(struct fbnic_ring *dst, struct fbnic_ring *src)
@@ -2310,6 +2362,10 @@ static void __fbnic_swap_ring_mem(struct fbnic_ring *dst, struct fbnic_ring *src
 
 static int fbnic_move_qt_resources(struct fbnic_q_triad *dst, struct fbnic_q_triad *src)
 {
+	__fbnic_reset_ring(&dst->sub0);
+	__fbnic_reset_ring(&dst->sub1);
+	__fbnic_reset_ring(&dst->cmpl);
+
 	__fbnic_swap_ring_mem(&dst->sub0, &src->sub0);
 	__fbnic_swap_ring_mem(&dst->sub1, &src->sub1);
 	__fbnic_swap_ring_mem(&dst->cmpl, &src->cmpl);
@@ -2317,12 +2373,18 @@ static int fbnic_move_qt_resources(struct fbnic_q_triad *dst, struct fbnic_q_tri
 	return 0;
 }
 
-static int fbnic_alloc_nv_resources(struct fbnic_net *fbn,
-				    struct fbnic_napi_vector *nv, int idx)
+static bool __is_split(unsigned int napi, unsigned int tx, unsigned int rx)
 {
-	const struct netdev_nic_cfg_info *info = &fbn->netdev->nic_cfg_info;
-	struct netdev_nic_cfg *nic = fbn->netdev->nic_cfg;
-	int i, j, err;
+	return napi < FBNIC_MAX_TXQS && napi == tx + rx;
+}
+
+static int fbnic_alloc_nv_resources(struct net_device *netdev,
+				    struct netdev_nic_cfg *nic,
+				    struct fbnic_napi_vector *nv,
+				    unsigned int tx,
+				    int idx)
+{
+	int err;
 	struct fbnic_txq_mem *txqmem;
 	struct fbnic_rxq_mem *rxqmem;
 
@@ -2335,12 +2397,14 @@ static int fbnic_alloc_nv_resources(struct fbnic_net *fbn,
 	//   tx qt has
 	// rx only: 2 qt, tx (xdp + cmpl queue) + rx (all three)
 	// tx only: 1 qt, tx (all three queues)
-	printk("----- alloc_nv_resources: i=%d, type=%d\n", idx, nv->type);
 
+	printk("----- alloc_nv_resources: nv=%px, idx=%d, num_tx=%d, type=%d\n", nv, idx, tx, nv->type);
 	if (nv->type == FBNIC_NV_TYPE_COMBINED) {
-		txqmem = netdev_nic_cfg_txqmem(fbn->netdev, idx);
-		rxqmem = netdev_nic_cfg_rxqmem(fbn->netdev, idx);
+		txqmem = netdev_nic_cfg_txqmem(netdev, nic, nic->txq_idx++);
+		rxqmem = netdev_nic_cfg_rxqmem(netdev, nic, nic->rxq_idx++);
 		// take from both rxqmem and txqmem at idx
+		printk("----- alloc_nv_resources: moving from txqmem=%px into nv->qt[0]\n", txqmem);
+		// nv->qt is dst and newly initialised
 		fbnic_move_qt_resources(&nv->qt[0], &txqmem->qt);
 
 		err = xdp_rxq_info_reg_mem_model(&nv->qt[1].xdp_rxq,
@@ -2349,6 +2413,7 @@ static int fbnic_alloc_nv_resources(struct fbnic_net *fbn,
 		if (err)
 			return err;
 
+		printk("----- alloc_nv_resources: moving from rxqmem=%px into nv->qt[1], rxqmem->page_pool=%px\n", rxqmem, rxqmem->page_pool);
 		fbnic_move_qt_resources(&nv->qt[1], &rxqmem->qt);
 		nv->page_pool = rxqmem->page_pool;
 
@@ -2357,31 +2422,45 @@ static int fbnic_alloc_nv_resources(struct fbnic_net *fbn,
 
 		WARN_ON(nv->type != txqmem->type);
 		WARN_ON(nv->type != rxqmem->type);
+
+		txqmem->nv = nv;
+		rxqmem->nv = nv;
 	} else if (nv->type == FBNIC_NV_TYPE_TX_ONLY) {
-		txqmem = netdev_nic_cfg_txqmem(fbn->netdev, idx);
+		// nic is other_cfg if recfg
+		// idx is up to num_napi
+		txqmem = netdev_nic_cfg_txqmem(netdev, nic, nic->txq_idx++);
 		// take only from txqmem
+		printk("----- alloc_nv_resources: moving from txqmem=%px into nv->qt[0]\n", txqmem);
 		fbnic_move_qt_resources(&nv->qt[0], &txqmem->qt);
 
 		WARN_ON(nv->txt_count != 1);
 		WARN_ON(nv->rxt_count);
 
 		WARN_ON(nv->type != txqmem->type);
+
+		txqmem->nv = nv;
 	} else {
-		rxqmem = netdev_nic_cfg_rxqmem(fbn->netdev, idx - fbn->num_tx_queues);
+		rxqmem = netdev_nic_cfg_rxqmem(netdev, nic, nic->rxq_idx++);
 		// take only from rxqmem
 		// tx qt always goes first
+		printk("----- alloc_nv_resources: moving from rxqmem->xdp_qt into nv->qt[0], xdp_qt->sub0.desc=%px, xdp_qt->sub1.desc=%px, xdp_qt->cmpl.desc=%px\n", rxqmem, rxqmem->xdp_qt.sub0.desc, rxqmem->xdp_qt.sub1.desc, rxqmem->xdp_qt.cmpl.desc);
 		fbnic_move_qt_resources(&nv->qt[0], &rxqmem->xdp_qt);
 
+		// we're only assigning fbnic_ring
+		// this xdp_rxq is on the qt in nv, not rxqmem!
 		err = xdp_rxq_info_reg_mem_model(&nv->qt[1].xdp_rxq,
 						 MEM_TYPE_PAGE_POOL,
 						 rxqmem->page_pool);
 		if (err)
 			return err;
 
+		printk("----- alloc_nv_resources: moving from rxqmem=%px into nv->qt[1], rxqmem->page_pool=%px\n", rxqmem, rxqmem->page_pool);
 		fbnic_move_qt_resources(&nv->qt[1], &rxqmem->qt);
 		nv->page_pool = rxqmem->page_pool;
 
 		WARN_ON(nv->type != rxqmem->type);
+
+		rxqmem->nv = nv;
 	}
 
 	// NOTE: after this point, nv->qt contains the newly alloc'd qmem
@@ -2429,21 +2508,29 @@ void fbnic_free_resources(struct fbnic_net *fbn)
 {
 	struct fbnic_napi_vector *nv;
 
-	/* NOTE: do nothing now and let netdev core handle it
 	list_for_each_entry(nv, &fbn->napis, napis)
 		fbnic_free_nv_resources(fbn, nv);
-	*/
 }
 
-int fbnic_alloc_resources(struct fbnic_net *fbn)
+int fbnic_alloc_resources(struct fbnic_net *fbn, bool recfg)
 {
 	// NOTE: all places that calls this MUST have qmem already alloc'd
 	struct fbnic_napi_vector *nv;
 	int err = -ENODEV;
 	int i = 0;
+	struct netdev_nic_cfg *nic = fbn->netdev->nic_cfg;
+	if (nic->recfg)
+		nic = nic->other_cfg;
+	nic->txq_idx = 0;
+	nic->rxq_idx = 0;
 
-	list_for_each_entry(nv, &fbn->napis, napis) {
-		err = fbnic_alloc_nv_resources(fbn, nv, i);
+	//nic = recfg ? fbn->netdev->nic_cfg->other_cfg : fbn->netdev->nic_cfg;
+	//
+	// NOTE: if recfg, fbn is clone
+
+	list_for_each_entry_reverse(nv, &fbn->napis, napis) {
+		// the napi_vectors are added in REVERSE
+		err = fbnic_alloc_nv_resources(fbn->netdev, nic, nv, fbn->num_tx_queues, i);
 		if (err)
 			goto free_resources;
 		i++;
@@ -2458,7 +2545,7 @@ free_resources:
 	return err;
 }
 
-static void fbnic_disable_twq0(struct fbnic_ring *txr)
+void fbnic_disable_twq0(struct fbnic_ring *txr)
 {
 	u32 twq_ctl = fbnic_ring_rd32(txr, FBNIC_QUEUE_TWQ0_CTL);
 
@@ -2467,7 +2554,7 @@ static void fbnic_disable_twq0(struct fbnic_ring *txr)
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TWQ0_CTL, twq_ctl);
 }
 
-static void fbnic_disable_twq1(struct fbnic_ring *txr)
+void fbnic_disable_twq1(struct fbnic_ring *txr)
 {
 	u32 twq_ctl = fbnic_ring_rd32(txr, FBNIC_QUEUE_TWQ1_CTL);
 
@@ -2476,13 +2563,13 @@ static void fbnic_disable_twq1(struct fbnic_ring *txr)
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TWQ1_CTL, twq_ctl);
 }
 
-static void fbnic_disable_tcq(struct fbnic_ring *txr)
+void fbnic_disable_tcq(struct fbnic_ring *txr)
 {
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TCQ_CTL, 0);
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TIM_MASK, FBNIC_QUEUE_TIM_MASK_MASK);
 }
 
-static void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
+void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
 {
 	u32 bdq_ctl = fbnic_ring_rd32(hpq, FBNIC_QUEUE_BDQ_CTL);
 
@@ -2491,10 +2578,12 @@ static void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
 	fbnic_ring_wr32(hpq, FBNIC_QUEUE_BDQ_CTL, bdq_ctl);
 }
 
-static void fbnic_disable_rcq(struct fbnic_ring *rxr)
+void fbnic_disable_rcq(struct fbnic_ring *rxr)
 {
+	// 1) Clear RCQ_CTL[qid].enable. RDE starts dropping any new frames received on this RCQ.
 	fbnic_ring_wr32(rxr, FBNIC_QUEUE_RCQ_CTL, 0);
 	fbnic_ring_wr32(rxr, FBNIC_QUEUE_RIM_MASK, FBNIC_QUEUE_RIM_MASK_MASK);
+	// 2) Wait for assertion of FB_NIC_QM_RX_GLOBAL_RCQ_IDLE[qid].
 }
 
 void fbnic_napi_disable(struct fbnic_net *fbn)
@@ -2567,12 +2656,6 @@ static void fbnic_tx_flush_off(struct fbnic_dev *fbd)
 {
 	fbnic_rmw32(fbd, FBNIC_TMI_DROP_CTRL, FBNIC_TMI_DROP_CTRL_EN, 0);
 }
-
-struct fbnic_idle_regs {
-	u32 reg_base;
-	u8 reg_fpga_cnt;
-	u8 reg_asic_cnt;
-};
 
 static bool fbnic_all_idle(struct fbnic_dev *fbd,
 			   const struct fbnic_idle_regs *regs,
@@ -2708,6 +2791,7 @@ void fbnic_flush(struct fbnic_net *fbn)
 void fbnic_fill(struct fbnic_net *fbn)
 {
 	struct fbnic_napi_vector *nv;
+	int idx = 0;
 
 	list_for_each_entry(nv, &fbn->napis, napis) {
 		int i, j;
@@ -2720,10 +2804,11 @@ void fbnic_fill(struct fbnic_net *fbn)
 			fbnic_fill_bdq(nv, &qt->sub0);
 			fbnic_fill_bdq(nv, &qt->sub1);
 		}
+		idx++;
 	}
 }
 
-static void fbnic_enable_twq0(struct fbnic_ring *twq)
+void fbnic_enable_twq0(struct fbnic_ring *twq)
 {
 	u32 log_size = fls(twq->size_mask);
 
@@ -2745,7 +2830,7 @@ static void fbnic_enable_twq0(struct fbnic_ring *twq)
 	fbnic_ring_wr32(twq, FBNIC_QUEUE_TWQ0_CTL, FBNIC_QUEUE_TWQ_CTL_ENABLE);
 }
 
-static void fbnic_enable_twq1(struct fbnic_ring *twq)
+void fbnic_enable_twq1(struct fbnic_ring *twq)
 {
 	u32 log_size = fls(twq->size_mask);
 
@@ -2767,7 +2852,7 @@ static void fbnic_enable_twq1(struct fbnic_ring *twq)
 	fbnic_ring_wr32(twq, FBNIC_QUEUE_TWQ1_CTL, FBNIC_QUEUE_TWQ_CTL_ENABLE);
 }
 
-static void fbnic_enable_tcq(struct fbnic_napi_vector *nv,
+void fbnic_enable_tcq(struct fbnic_napi_vector *nv,
 			     struct fbnic_ring *tcq)
 {
 	u32 log_size = fls(tcq->size_mask);
@@ -2801,7 +2886,7 @@ static void fbnic_enable_tcq(struct fbnic_napi_vector *nv,
 	fbnic_ring_wr32(tcq, FBNIC_QUEUE_TCQ_CTL, FBNIC_QUEUE_TCQ_CTL_ENABLE);
 }
 
-static void fbnic_enable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
+void fbnic_enable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
 {
 	u32 bdq_ctl = FBNIC_QUEUE_BDQ_CTL_ENABLE;
 	u32 log_size;
@@ -2839,7 +2924,7 @@ write_ctl:
 	fbnic_ring_wr32(hpq, FBNIC_QUEUE_BDQ_CTL, bdq_ctl);
 }
 
-static void fbnic_config_drop_mode_rcq(struct fbnic_napi_vector *nv,
+void fbnic_config_drop_mode_rcq(struct fbnic_napi_vector *nv,
 				       struct fbnic_ring *rcq)
 {
 	struct fbnic_net *fbn = netdev_priv(nv->napi.dev);
@@ -2873,7 +2958,7 @@ void fbnic_config_drop_mode(struct fbnic_net *fbn)
 	}
 }
 
-static void fbnic_enable_rcq(struct fbnic_napi_vector *nv,
+void fbnic_enable_rcq(struct fbnic_napi_vector *nv,
 			     struct fbnic_ring *rcq)
 {
 	u32 log_size = fls(rcq->size_mask);
@@ -2949,7 +3034,7 @@ void fbnic_enable(struct fbnic_net *fbn)
 	wrfl();
 }
 
-static void fbnic_nv_irq_enable(struct fbnic_napi_vector *nv)
+void fbnic_nv_irq_enable(struct fbnic_napi_vector *nv)
 {
 	struct fbnic_net *fbn = netdev_priv(nv->napi.dev);
 	struct fbnic_dev *fbd = nv->fbd;
@@ -3064,6 +3149,7 @@ static int fbnic_rplc_ring_alloc(struct fbnic_net *clone,
 {
 	int err;
 
+	// NOTE: this is zero'd
 	ring->rplc = kzalloc(sizeof(*ring), GFP_KERNEL);
 	if (!ring->rplc)
 		return -ENOMEM;
@@ -3164,16 +3250,46 @@ static void fbnic_rplc_ring_swap(struct fbnic_net *fbn, struct fbnic_ring *ring)
 void fbnic_rplc_swap_rings(struct fbnic_net *fbn)
 {
 	struct fbnic_napi_vector *nv;
+	struct netdev_nic_cfg *nic;
+	struct fbnic_txq_mem *txqmem;
+	struct fbnic_rxq_mem *rxqmem;
+	int idx = 0;
+
+	// FIXME: the only 3 things we need are:
+	// fbnic_ring_init(ring->rplc, ring->doorbell, ring->q_idx, ring->flags);
+	/* these are swapped
+	dst->buffer = src->buffer;
+	dst->desc = src->desc;
+	dst->dma = src->dma;
+	dst->size = src->size;
+	dst->size_mask = src->size_mask;
+
+	so reset:
+	head
+	tail
+	stats
+
+	*/
+
+	nic = fbn->netdev->nic_cfg;
 
 	list_for_each_entry(nv, &fbn->napis, napis) {
-		int i;
+		if (nv->type == FBNIC_NV_TYPE_COMBINED) {
+			txqmem = netdev_nic_cfg_txqmem(fbn->netdev, nic, idx);
+			rxqmem = netdev_nic_cfg_rxqmem(fbn->netdev, nic, idx);
 
-		for (i = 0; i < nv->txt_count + nv->rxt_count; i++) {
-			struct fbnic_q_triad *qt = &nv->qt[i];
+			fbnic_move_qt_resources(&nv->qt[0], &txqmem->qt);
+			fbnic_move_qt_resources(&nv->qt[1], &rxqmem->qt);
+		} else if (nv->type == FBNIC_NV_TYPE_TX_ONLY) {
+			txqmem = netdev_nic_cfg_txqmem(fbn->netdev, nic, idx);
 
-			fbnic_rplc_ring_swap(fbn, &qt->sub0);
-			fbnic_rplc_ring_swap(fbn, &qt->sub1);
-			fbnic_rplc_ring_swap(fbn, &qt->cmpl);
+			fbnic_move_qt_resources(&nv->qt[0], &txqmem->qt);
+		} else {
+			rxqmem = netdev_nic_cfg_rxqmem(fbn->netdev, nic, idx - fbn->num_tx_queues);
+
+			fbnic_move_qt_resources(&nv->qt[1], &rxqmem->qt);
 		}
+
+		idx++;
 	}
 }

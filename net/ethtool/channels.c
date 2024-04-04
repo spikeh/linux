@@ -113,10 +113,16 @@ ethnl_set_channels(struct ethnl_req_info *req_info, struct genl_info *info)
 	bool mod = false, mod_combined = false;
 	struct net_device *dev = req_info->dev;
 	struct ethtool_channels channels = {};
+	//struct netdev_nic_cfg *clone;
+	//struct ethtool_channels *channels;
 	struct nlattr **tb = info->attrs;
 	u32 err_attr, max_rxfh_in_use;
 	u64 max_rxnfc_in_use;
 	int ret;
+
+	//netdev_nic_recfg_start(dev);
+	//clone = dev->nic_cfg->other_cfg;
+	//channels = &clone->cfg.chan;
 
 	dev->ethtool_ops->get_channels(dev, &channels);
 	old_total = channels.combined_count +
@@ -192,6 +198,13 @@ ethnl_set_channels(struct ethnl_req_info *req_info, struct genl_info *info)
 			return -EINVAL;
 		}
 
+	// ethtool_ops->set_channels should just be a validation step
+	//netdev_nic_recfg_prep();
+
+	//netdev_nic_recfg_swap();
+
+	// TODO: netdev_cfg
+	// only if changed?
 	ret = dev->ethtool_ops->set_channels(dev, &channels);
 	return ret < 0 ? ret : 1;
 }

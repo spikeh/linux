@@ -615,6 +615,7 @@ static void fbnic_clone_swap(struct fbnic_net *orig,
 
 	fbnic_clone_swap_cfg(orig, clone);
 
+	/* FIXME: not needed with restart
 	list_for_each_entry(nv, &clone->napis, napis) {
 		set_bit(NAPI_STATE_DRV0, &nv->napi.state);
 		synchronize_irq(msix_entries[nv->v_idx].vector);
@@ -624,6 +625,7 @@ static void fbnic_clone_swap(struct fbnic_net *orig,
 		synchronize_irq(msix_entries[nv->v_idx].vector);
 		fbnic_aggregate_vector_counters(orig, nv);
 	}
+	*/
 
 	list_swap(&clone->napis, &orig->napis);
 	for (i = 0; i < ARRAY_SIZE(orig->tx); i++)
@@ -653,7 +655,8 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
-	struct fbnic_net *clone;
+	//struct fbnic_net *clone;
+	struct netdev_nic_cfg *clone;
 	int err;
 
 	ring->rx_pending	= roundup_pow_of_two(ring->rx_pending);
@@ -683,12 +686,59 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 		return 0;
 	}
 
+	netdev_nic_recfg_start(netdev);
+	// FIXME: set txq_cnt and rxq_cnt
+	//
+	// struct netdev_nic_cfg clone is ready
+	// copy the new ring cfg in
+	clone = netdev->nic_cfg->other_cfg;
+	memcpy(&clone->ring, ring, sizeof(*ring));
+	memcpy(&clone->kring, kernel_ring, sizeof(*kernel_ring));
+
+	// memcpy(&clone->tqcfg.ring, ring, sizeof(*ring));
+	// memcpy(&clone->tqcfg.kring, kernel_ring, sizeof(*kernel_ring));
+	// memcpy(&clone->rqcfg.ring, ring, sizeof(*ring));
+	// memcpy(&clone->rqcfg.kring, kernel_ring, sizeof(*kernel_ring));
+
+	netdev_nic_recfg_prep(netdev);
+	// new qmem alloc'd
+
+	// TODO: bring a SINGLE queue down
+	// something about irq msix too
+	// which ring has changed?
+
+	// go down
+	fbnic_down_noidle(fbn);
+	err = fbnic_wait_all_queues_idle(fbn->fbd, true);
+	if (err)
+		goto err_start_stack;
+
+	// nothing can fail past this point
+	fbnic_flush(fbn);
+
+	// do the swap
+	netdev_nic_recfg_swap(netdev);
+	// now netdev_nic_cfg swapped
+	// this needs to *assign* qt from qmem into nv
+	fbnic_rplc_swap_rings(fbn);
+
+	// go up
+	fbnic_up(fbn);
+
+	netdev_nic_recfg_end(netdev);
+
+	return 0;
+
+	// --------------------------------------
+
+	/*
 	clone = fbnic_clone_create(fbn);
 	if (!clone)
 		return -ENOMEM;
 
 	fbnic_set_rings(clone, ring);
 
+	// this allocs new mem into the existing nv qt ring's `rplc`
 	err = fbnic_rplc_alloc_rings(fbn, clone);
 	if (err)
 		goto err_free_clone;
@@ -698,7 +748,7 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 	if (err)
 		goto err_start_stack;
 
-	/* nothing can fail past this point */
+	// nothing can fail past this point
 	fbnic_flush(fbn);
 
 	fbnic_rplc_swap_rings(fbn);
@@ -710,14 +760,15 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 	fbnic_clone_free(clone);
 
 	return 0;
+	*/
 
 err_start_stack:
 	/* TBD: enable does reset - can we just renable ?? asking @jhas */
 	fbnic_flush(fbn);
 	fbnic_up(fbn);
 	fbnic_rplc_free_rings(fbn);
-err_free_clone:
-	fbnic_clone_free(clone);
+//err_free_clone:
+	//fbnic_clone_free(clone);
 	return err;
 }
 
@@ -784,7 +835,7 @@ static int fbnic_setup_loopback_net(struct fbnic_net *fbn)
 	}
 
 	/* Populate descriptors */
-	if (fbnic_alloc_resources(fbn)) {
+	if (fbnic_alloc_resources(fbn, false)) {
 		ret_val = 11;
 		goto err_free_napis;
 	}
@@ -1268,6 +1319,9 @@ static void fbnic_set_queues(struct fbnic_net *fbn, struct ethtool_channels *ch,
 			    max_napis);
 }
 
+// TODO: ops should have a flag
+// opt into reset queues from the core
+// NOTE: rtnl_lock is held during set() in ethnl_default_set_doit
 static int fbnic_set_channels(struct net_device *netdev,
 			      struct ethtool_channels *ch)
 {
@@ -1275,7 +1329,7 @@ static int fbnic_set_channels(struct net_device *netdev,
 	unsigned int max_napis, standalone;
 	struct fbnic_dev *fbd = fbn->fbd;
 	struct fbnic_net *clone;
-	int err;
+	int i, err;
 
 	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
 	standalone = ch->rx_count + ch->tx_count;
@@ -1306,36 +1360,116 @@ static int fbnic_set_channels(struct net_device *netdev,
 	memset(clone->tx, 0, sizeof(clone->tx));
 	memset(clone->rx, 0, sizeof(clone->rx));
 
-	err = fbnic_alloc_napi_vectors(clone);
+	err = netdev_nic_recfg_start(netdev);
+	// NOTE: nic_cfg txq_cnt and rxq_cnt are 0
+	// set them properly here
 	if (err)
 		goto err_free_clone;
+	netdev->nic_cfg->other_cfg->txq_cnt = clone->num_tx_queues;
+	netdev->nic_cfg->other_cfg->rxq_cnt = clone->num_rx_queues;
+	memcpy(&netdev->nic_cfg->other_cfg->cfg.chan, ch, sizeof(*ch));
+	// other_cfg ready at this point
 
-	err = fbnic_alloc_resources(clone);
+	// alloc new queues using other_cfg into other_cfg
+	err = netdev_nic_recfg_prep(netdev);
+	if (err)
+		goto err_free_recfg;
+
+	err = fbnic_alloc_napi_vectors(clone);
+	if (err)
+		goto err_free_recfg;
+
+	// if recfg is set, then use other_cfg->qmem
+	// sets txq_mem->nv and rxq_mem-nv assoc
+	err = fbnic_alloc_resources(clone, true);
 	if (err)
 		goto err_free_napis;
 
+	// NOTE: maybe this is the better one to start
+	// because we need napi_vectors
+	// so stop old nv, start new nv etc
+
+	for (i = 0; i < max(fbn->num_tx_queues, clone->num_tx_queues); i++) {
+		netdev_nic_cfg_restart_txq(netdev, i);
+	}
+
+	for (i = 0; i < max(fbn->num_tx_queues, clone->num_rx_queues); i++) {
+		netdev_nic_cfg_restart_rxq(netdev, i);
+	}
+
+	/* FIXME: not needed with restart
 	fbnic_down_noidle(fbn);
 	err = fbnic_wait_all_queues_idle(fbn->fbd, true);
 	if (err)
 		goto err_start_stack;
+	*/
 
 	err = netif_set_real_num_queues(netdev, clone->num_tx_queues,
 					clone->num_rx_queues);
 	if (err)
 		goto err_start_stack;
 
+	// TODO: for each new tx + rx queue
+	// stop old, drain, swap, start new
+
+	// NOTE:
+	// if old > new i.e.
+	// old: [||||||||||||]
+	// new: [||||||||]
+	// stop these    ^---
+	// ONLY
+	//
+	// NOTE:
+	// if new > old i.e.
+	// old: [||||||||]
+	// new: [||||||||||||]
+	// start these   ^---
+	// ONLY
+
+	/*
+	for (i = 0; i < clone->num_tx_queues; i++) {
+		if (i > fbn->num_tx_queues) {
+			fbnic_tx_queue_stop();
+			fbnic_tx_queue_start();
+		} else {
+			// restart it
+		}
+	}
+
+	for (; i < fbn->num_tx_queues; i++) {
+		// stop it
+	}
+
+	for (i = 0; i < clone->num_rx_queues; i++) {
+		if (i > fbn->num_rx_queues) {
+			// just start it
+		} else {
+			// restart it
+		}
+	}
+
+	for (; i < fbn->num_rx-queues; i++) {
+		// stop it
+	}
+	*/
+
+	// FIXME: not needed with restart
 	/* nothing can fail past this point */
-	fbnic_flush(fbn);
+	//fbnic_flush(fbn);
 
 	fbnic_clone_swap(fbn, clone);
+	// clone = old
+	netdev_nic_recfg_swap(netdev);
 
 	/* reset RSS indirection table */
-	fbnic_reset_indir_tbl(fbn);
+	//fbnic_reset_indir_tbl(fbn);
 
-	fbnic_up(fbn);
+	// FIXME: not needed with restart
+	// fbnic_up(fbn);
 
 	fbnic_free_resources(clone);
 	fbnic_free_napi_vectors(clone);
+	netdev_nic_recfg_end(netdev);
 	fbnic_clone_free(clone);
 
 	return 0;
@@ -1347,6 +1481,8 @@ err_start_stack:
 	fbnic_free_resources(clone);
 err_free_napis:
 	fbnic_free_napi_vectors(clone);
+err_free_recfg:
+	netdev_nic_recfg_end(netdev);
 err_free_clone:
 	fbnic_clone_free(clone);
 	return err;

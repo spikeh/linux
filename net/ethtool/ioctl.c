@@ -1938,6 +1938,7 @@ static noinline_for_stack int ethtool_set_channels(struct net_device *dev,
 		if (xsk_get_pool_from_qid(dev, i))
 			return -EINVAL;
 
+	// TODO: netdev_cfg
 	ret = dev->ethtool_ops->set_channels(dev, &channels);
 	if (!ret)
 		ethtool_notify(dev, ETHTOOL_MSG_CHANNELS_NTF, NULL);

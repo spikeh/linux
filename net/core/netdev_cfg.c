@@ -21,6 +21,8 @@ netdev_nic_cfg_txqmem_alloc(struct net_device *dev, struct netdev_nic_cfg *nic)
 	memcpy(&nic->tqcfg.ring, &nic->ring, sizeof(nic->ring));
 	memcpy(&nic->tqcfg.kring, &nic->kring, sizeof(nic->kring));
 
+	printk("----- nic_cfg_txqmem_alloc: ring->tx=%d\n", nic->tqcfg.ring.tx_pending);
+
 	for (i = 0; i < nic->txq_cnt; i++) {
 		void *qmem = nic->txqmem + i * info->txq_mem_size;
 
@@ -33,9 +35,64 @@ netdev_nic_cfg_txqmem_alloc(struct net_device *dev, struct netdev_nic_cfg *nic)
 
 err_qmem_free_prev:
 	while (i--) {
-		void *qmem = nic->rxqmem + i * info->rxq_mem_size;
+		void *qmem = nic->txqmem + i * info->txq_mem_size;
 
-		dev->netdev_ops->ndo_tx_queue_mem_free(dev, dcfg, &nic->tqcfg, qmem);
+		dev->netdev_ops->ndo_tx_queue_mem_free(dev, dcfg, &nic->tqcfg, qmem, i);
+	}
+	kvfree(nic->txqmem);
+	nic->txqmem = NULL;
+	return err;
+}
+
+static int
+netdev_nic_cfg_txqmem_realloc(struct net_device *dev, struct netdev_nic_cfg *nic)
+{
+	const struct netdev_nic_cfg_info *info = &dev->nic_cfg_info;
+	struct netdev_cfg *dcfg = &nic->cfg;
+	unsigned int i;
+	unsigned int count;
+	int err;
+	size_t bytes;
+	struct netdev_nic_cfg *old_nic = dev->nic_cfg;
+
+	// NOTE: two options of getting here
+	// 1. either ring params changed or
+	// 2. channels changed
+
+	// TODO: is txq_cnt and rxq_cnt set correctly?
+	if (WARN_ON(!nic->txq_cnt))
+		return -EINVAL;
+
+	nic->txqmem = kvcalloc(nic->txq_cnt, info->txq_mem_size, GFP_KERNEL);
+	if (!nic->txqmem)
+		return -ENOMEM;
+
+	memcpy(&nic->tqcfg.ring, &nic->ring, sizeof(nic->ring));
+	memcpy(&nic->tqcfg.kring, &nic->kring, sizeof(nic->kring));
+
+	count = min(old_nic->txq_cnt, nic->txq_cnt);
+	if (unlikely(check_mul_overflow(old_nic->txq_cnt, info->txq_mem_size, &bytes)))
+		return -ENOMEM;
+	memcpy(nic->txqmem, old_nic->txqmem, bytes);
+
+	printk("----- txqmem_realloc: queue count=%d, memcpy bytes=%lu\n", count, bytes);
+
+	// maybe realloc old queues, alloc new queues
+	for (i = 0; i < nic->txq_cnt; i++) {
+		void *qmem = nic->txqmem + i * info->txq_mem_size;
+
+		dev->netdev_ops->ndo_tx_queue_mem_alloc(dev, dcfg, &nic->tqcfg, qmem, i);
+		if (err)
+			goto err_qmem_free_prev;
+	}
+
+	return 0;
+
+err_qmem_free_prev:
+	while (i--) {
+		void *qmem = nic->txqmem + i * info->txq_mem_size;
+
+		dev->netdev_ops->ndo_tx_queue_mem_free(dev, dcfg, &nic->tqcfg, qmem, i);
 	}
 	kvfree(nic->txqmem);
 	nic->txqmem = NULL;
@@ -60,6 +117,8 @@ netdev_nic_cfg_rxqmem_alloc(struct net_device *dev, struct netdev_nic_cfg *nic)
 	memcpy(&nic->rqcfg.ring, &nic->ring, sizeof(nic->ring));
 	memcpy(&nic->rqcfg.kring, &nic->kring, sizeof(nic->kring));
 
+	printk("----- nic_cfg_rxqmem_alloc: ring->rx=%d, ring->rx_mini=%d, ring->rx_jumbo=%d\n", nic->rqcfg.ring.rx_pending, nic->rqcfg.ring.rx_mini_pending, nic->rqcfg.ring.rx_jumbo_pending);
+
 	for (i = 0; i < nic->rxq_cnt; i++) {
 		void *qmem = nic->rxqmem + i * info->rxq_mem_size;
 
@@ -74,7 +133,60 @@ err_qmem_free_prev:
 	while (i--) {
 		void *qmem = nic->rxqmem + i * info->rxq_mem_size;
 
-		dev->netdev_ops->ndo_rx_queue_mem_free(dev, dcfg, &nic->rqcfg, qmem);
+		dev->netdev_ops->ndo_rx_queue_mem_free(dev, dcfg, &nic->rqcfg, qmem, i);
+	}
+	kvfree(nic->rxqmem);
+	nic->rxqmem = NULL;
+	return err;
+}
+
+static int
+netdev_nic_cfg_rxqmem_realloc(struct net_device *dev, struct netdev_nic_cfg *nic)
+{
+	const struct netdev_nic_cfg_info *info = &dev->nic_cfg_info;
+	struct netdev_cfg *dcfg = &nic->cfg;
+	unsigned int i;
+	unsigned int count;
+	int err;
+	size_t bytes;
+	struct netdev_nic_cfg *old_nic = dev->nic_cfg;
+
+	// NOTE: two options of getting here
+	// 1. either ring params changed or
+	// 2. channels changed
+
+	// TODO: is txq_cnt and rxq_cnt set correctly?
+	if (WARN_ON(!nic->rxq_cnt))
+		return -EINVAL;
+
+	nic->rxqmem = kvcalloc(nic->rxq_cnt, info->rxq_mem_size, GFP_KERNEL);
+	if (!nic->rxqmem)
+		return -ENOMEM;
+
+	memcpy(&nic->rqcfg.ring, &nic->ring, sizeof(nic->ring));
+	memcpy(&nic->rqcfg.kring, &nic->kring, sizeof(nic->kring));
+
+	count = min(old_nic->rxq_cnt, nic->rxq_cnt);
+	if (unlikely(check_mul_overflow(old_nic->rxq_cnt, info->rxq_mem_size, &bytes)))
+		return -ENOMEM;
+	memcpy(nic->rxqmem, old_nic->rxqmem, bytes);
+
+	// maybe realloc old queues, alloc new queues
+	for (i = 0; i < nic->rxq_cnt; i++) {
+		void *qmem = nic->rxqmem + i * info->rxq_mem_size;
+
+		dev->netdev_ops->ndo_rx_queue_mem_alloc(dev, dcfg, &nic->rqcfg, qmem, i);
+		if (err)
+			goto err_qmem_free_prev;
+	}
+
+	return 0;
+
+err_qmem_free_prev:
+	while (i--) {
+		void *qmem = nic->rxqmem + i * info->rxq_mem_size;
+
+		dev->netdev_ops->ndo_rx_queue_mem_free(dev, dcfg, &nic->rqcfg, qmem, i);
 	}
 	kvfree(nic->rxqmem);
 	nic->rxqmem = NULL;
@@ -87,10 +199,13 @@ netdev_nic_cfg_txqmem_free(struct net_device *dev, struct netdev_nic_cfg *nic)
 	const struct netdev_nic_cfg_info *info = &dev->nic_cfg_info;
 	unsigned int i;
 
+	if (!nic->txqmem)
+		return;
+
 	for (i = 0; i < nic->txq_cnt; i++) {
 		void *qmem = nic->txqmem + i * info->txq_mem_size;
 
-		dev->netdev_ops->ndo_tx_queue_mem_free(dev, &nic->cfg, &nic->tqcfg, qmem);
+		dev->netdev_ops->ndo_tx_queue_mem_free(dev, &nic->cfg, &nic->tqcfg, qmem, i);
 	}
 	kvfree(nic->txqmem);
 	nic->txqmem = NULL;
@@ -102,10 +217,13 @@ netdev_nic_cfg_rxqmem_free(struct net_device *dev, struct netdev_nic_cfg *nic)
 	const struct netdev_nic_cfg_info *info = &dev->nic_cfg_info;
 	unsigned int i;
 
+	if (!nic->rxqmem)
+		return;
+
 	for (i = 0; i < nic->rxq_cnt; i++) {
 		void *qmem = nic->rxqmem + i * info->rxq_mem_size;
 
-		dev->netdev_ops->ndo_rx_queue_mem_free(dev, &nic->cfg, &nic->rqcfg, qmem);
+		dev->netdev_ops->ndo_rx_queue_mem_free(dev, &nic->cfg, &nic->rqcfg, qmem, i);
 	}
 	kvfree(nic->rxqmem);
 	nic->rxqmem = NULL;
@@ -191,20 +309,64 @@ void netdev_nic_cfg_stop(struct net_device *dev)
 }
 EXPORT_SYMBOL_GPL(netdev_nic_cfg_stop);
 
-void *netdev_nic_cfg_rxqmem(struct net_device *dev, unsigned int qid)
+void netdev_nic_cfg_restart_txq(struct net_device *netdev, unsigned int qid)
 {
-	struct netdev_nic_cfg *nic = dev->nic_cfg;
+	struct netdev_nic_cfg *nic;
+	void *qmem;
 
+	nic = netdev->nic_cfg;
+	WARN_ON(!nic->recfg);
+	printk("----- restart_txq: id=%d\n", qid);
+
+	if (qid < nic->txq_cnt) {
+		qmem = netdev_nic_cfg_txqmem(netdev, nic, qid);
+		printk("----- restart_txq: stopping old queue=%d\n", qid);
+		netdev->netdev_ops->ndo_tx_queue_stop(netdev, qmem, qid);
+	}
+
+	nic = nic->other_cfg;
+	if (qid < nic->txq_cnt) {
+		qmem = netdev_nic_cfg_txqmem(netdev, nic, qid);
+		printk("----- restart_txq: starting new queue=%d\n", qid);
+		netdev->netdev_ops->ndo_tx_queue_start(netdev, qmem, qid);
+	}
+}
+EXPORT_SYMBOL_GPL(netdev_nic_cfg_restart_txq);
+
+void netdev_nic_cfg_restart_rxq(struct net_device *netdev, unsigned int qid)
+{
+	struct netdev_nic_cfg *nic;
+	void *qmem;
+
+	nic = netdev->nic_cfg;
+	WARN_ON(!nic->recfg);
+	printk("----- restart_rxq: id=%d\n", qid);
+
+	if (qid < nic->rxq_cnt) {
+		qmem = netdev_nic_cfg_rxqmem(netdev, nic, qid);
+		printk("----- restart_rxq: stopping old queue=%d\n", qid);
+		netdev->netdev_ops->ndo_rx_queue_stop(netdev, qmem, qid);
+	}
+
+	nic = nic->other_cfg;
+	if (qid < nic->rxq_cnt) {
+		qmem = netdev_nic_cfg_rxqmem(netdev, nic, qid);
+		printk("----- restart_rxq: starting new queue=%d\n", qid);
+		netdev->netdev_ops->ndo_rx_queue_start(netdev, qmem, qid);
+	}
+}
+EXPORT_SYMBOL_GPL(netdev_nic_cfg_restart_rxq);
+
+void *netdev_nic_cfg_rxqmem(struct net_device *dev, struct netdev_nic_cfg *nic, unsigned int qid)
+{
 	if (WARN_ON_ONCE(qid >= nic->rxq_cnt))
 		return NULL;
 	return nic->rxqmem + qid * dev->nic_cfg_info.rxq_mem_size;
 }
 EXPORT_SYMBOL_GPL(netdev_nic_cfg_rxqmem);
 
-void *netdev_nic_cfg_txqmem(struct net_device *dev, unsigned int qid)
+void *netdev_nic_cfg_txqmem(struct net_device *dev, struct netdev_nic_cfg *nic, unsigned int qid)
 {
-	struct netdev_nic_cfg *nic = dev->nic_cfg;
-
 	if (WARN_ON_ONCE(qid >= nic->txq_cnt))
 		return NULL;
 	return nic->txqmem + qid * dev->nic_cfg_info.txq_mem_size;
@@ -230,6 +392,7 @@ int netdev_nic_recfg_start(struct net_device *dev)
 	new_cfg->rxqmem = NULL;
 
 	dev->nic_cfg->other_cfg = new_cfg;
+	dev->nic_cfg->recfg = true;
 
 	return 0;
 }
@@ -240,14 +403,18 @@ int netdev_nic_recfg_prep(struct net_device *dev)
 	struct netdev_nic_cfg *nic = dev->nic_cfg->other_cfg;
 	int err;
 
+	if (!nic->txq_cnt)
+		nic->txq_cnt = dev->real_num_tx_queues;
 	if (!nic->rxq_cnt)
 		nic->rxq_cnt = dev->real_num_rx_queues;
 
-	err = netdev_nic_cfg_txqmem_alloc(dev, nic);
+	printk("----- netdev_nic_recfg_prep: txq=%d, rxq=%d\n", nic->txq_cnt, nic->rxq_cnt);
+
+	err = netdev_nic_cfg_txqmem_realloc(dev, nic);
 	if (err)
 		goto err_clear_txqcnt;
 
-	err = netdev_nic_cfg_rxqmem_alloc(dev, nic);
+	err = netdev_nic_cfg_rxqmem_realloc(dev, nic);
 	if (err)
 		goto err_clear_qcnt;
 
@@ -256,6 +423,7 @@ int netdev_nic_recfg_prep(struct net_device *dev)
 	return 0;
 
 err_clear_qcnt:
+	netdev_nic_cfg_txqmem_free(dev, nic);
 	nic->rxq_cnt = 0;
 err_clear_txqcnt:
 	nic->txq_cnt = 0;
@@ -267,19 +435,31 @@ void netdev_nic_recfg_swap(struct net_device *dev)
 {
 	struct netdev_nic_cfg *new, *old;
 
+	//dev->netdev_ops->ndo_(dev, &nic->cfg, &nic->rqcfg, qmem);
+	//ndo_recfg_stop();
+
 	old = dev->nic_cfg;
 	new = old->other_cfg;
 
+	// txqmem + rxqmem has swapped
 	dev->nic_cfg = new;
 	new->other_cfg = old;
 	old->other_cfg = NULL;
+
+	// restart tx queues
+	// restart rx queues
+	// but only if the device supports it i.e. check for some flag
+
+	old->recfg = false;
+
+	//ndo_recfg_start();
 }
 EXPORT_SYMBOL_GPL(netdev_nic_recfg_swap);
 
 void netdev_nic_recfg_end(struct net_device *dev)
 {
-	netdev_nic_cfg_rxqmem_free(dev, dev->nic_cfg->other_cfg);
 	netdev_nic_cfg_txqmem_free(dev, dev->nic_cfg->other_cfg);
+	netdev_nic_cfg_rxqmem_free(dev, dev->nic_cfg->other_cfg);
 	kfree(dev->nic_cfg->other_cfg);
 	dev->nic_cfg->other_cfg = NULL;
 }

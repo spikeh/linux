@@ -136,6 +136,7 @@ struct fbnic_napi_vector {
 	struct dentry *dbg_nv;
 	char name[IFNAMSIZ + 9];
 	int type;
+	bool disabled;
 
 	u16 v_idx;
 	u8 txt_count;
@@ -159,6 +160,8 @@ struct fbnic_txq_mem {
 
 	// type of nv that this qt will belong to
 	int type;
+
+	struct fbnic_napi_vector *nv;
 };
 
 struct fbnic_rxq_mem {
@@ -168,6 +171,14 @@ struct fbnic_rxq_mem {
 	struct page_pool *page_pool;
 
 	int type;
+
+	struct fbnic_napi_vector *nv;
+};
+
+struct fbnic_idle_regs {
+	u32 reg_base;
+	u8 reg_fpga_cnt;
+	u8 reg_asic_cnt;
 };
 
 netdev_tx_t fbnic_xmit_frame_ring(struct sk_buff *skb, struct fbnic_ring *ring);
@@ -175,6 +186,8 @@ netdev_tx_t fbnic_xmit_frame(struct sk_buff *skb, struct net_device *dev);
 netdev_features_t
 fbnic_features_check(struct sk_buff *skb, struct net_device *dev,
 		     netdev_features_t features);
+void fbnic_nv_irq_enable(struct fbnic_napi_vector *nv);
+void fbnic_nv_irq_disable(struct fbnic_napi_vector *nv);
 int fbnic_alloc_napi_vectors(struct fbnic_net *fbn);
 int fbnic_alloc_tx_ring_desc(struct fbnic_ring *txr, struct device *dev, const struct ethtool_ringparam *param);
 int fbnic_alloc_tx_ring_buffer(struct fbnic_ring *txr);
@@ -187,7 +200,27 @@ void fbnic_aggregate_ring_tx_counters(struct fbnic_net *fbn,
 				      struct fbnic_ring *txr);
 void fbnic_free_napi_vectors(struct fbnic_net *fbn);
 void fbnic_free_resources(struct fbnic_net *fbn);
-int fbnic_alloc_resources(struct fbnic_net *fbn);
+int fbnic_alloc_resources(struct fbnic_net *fbn, bool recfg);
+void fbnic_config_drop_mode_rcq(struct fbnic_napi_vector *nv,
+				       struct fbnic_ring *rcq);
+void fbnic_enable_twq0(struct fbnic_ring *twq);
+void fbnic_enable_twq1(struct fbnic_ring *twq);
+void fbnic_enable_tcq(struct fbnic_napi_vector *nv, struct fbnic_ring *tcq);
+void fbnic_enable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq);
+void fbnic_enable_rcq(struct fbnic_napi_vector *nv, struct fbnic_ring *rcq);
+void fbnic_disable_twq0(struct fbnic_ring *txr);
+void fbnic_disable_twq1(struct fbnic_ring *txr);
+void fbnic_disable_tcq(struct fbnic_ring *txr);
+void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq);
+void fbnic_disable_rcq(struct fbnic_ring *rxr);
+void fbnic_clean_twq0(struct fbnic_napi_vector *nv, int napi_budget,
+			     struct fbnic_ring *ring, bool discard,
+			     unsigned int hw_head);
+void fbnic_clean_twq1(struct fbnic_napi_vector *nv, int napi_budget,
+			     struct fbnic_ring *ring, bool discard,
+			     unsigned int hw_head);
+void fbnic_put_xdp_buff(struct fbnic_napi_vector *nv,
+			       struct fbnic_xdp_buff *xdp, int budget);
 void fbnic_napi_disable(struct fbnic_net *fbn);
 void fbnic_napi_enable(struct fbnic_net *fbn);
 void fbnic_disable(struct fbnic_net *fbn);

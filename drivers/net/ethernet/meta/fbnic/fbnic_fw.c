@@ -87,6 +87,7 @@ static int fbnic_mbx_map_msg(struct fbnic_dev *fbd, int mbx_idx,
 		return -EBUSY;
 
 	addr = fbnic_dma_map(fbd, msg, PAGE_SIZE, direction);
+	printk("----- fbnic_mbx_map_msg: addr from fbnic_dma_map()=0x%llx\n", addr);
 	if (fbnic_dma_mapping_error(fbd, addr)) {
 		fbnic_free_page(fbd, msg);
 		mbx->mapping_error++;
