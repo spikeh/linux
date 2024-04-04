@@ -57,6 +57,12 @@ struct fbnic_net;
 #define FBNIC_RING_F_STATS		BIT(2)	/* ring's stats may be used */
 #define FBNIC_RING_F_EDT		BIT(3)	/* Earliest Departure Time */
 
+enum {
+	FBNIC_NV_TYPE_COMBINED,
+	FBNIC_NV_TYPE_TX_ONLY,
+	FBNIC_NV_TYPE_RX_ONLY,
+};
+
 struct fbnic_xdp_buff {
 	struct xdp_buff buff;
 	ktime_t hwtstamp;
@@ -129,6 +135,7 @@ struct fbnic_napi_vector {
 	struct fbnic_dev *fbd;
 	struct dentry *dbg_nv;
 	char name[IFNAMSIZ + 9];
+	int type;
 
 	u16 v_idx;
 	u8 txt_count;
@@ -147,12 +154,33 @@ struct fbnic_napi_vector {
 	struct fbnic_q_triad qt[];
 };
 
+struct fbnic_txq_mem {
+	struct fbnic_q_triad qt;
+
+	// type of nv that this qt will belong to
+	int type;
+};
+
+struct fbnic_rxq_mem {
+	struct fbnic_q_triad qt;
+	struct fbnic_q_triad xdp_qt;
+
+	struct page_pool *page_pool;
+
+	int type;
+};
+
 netdev_tx_t fbnic_xmit_frame_ring(struct sk_buff *skb, struct fbnic_ring *ring);
 netdev_tx_t fbnic_xmit_frame(struct sk_buff *skb, struct net_device *dev);
 netdev_features_t
 fbnic_features_check(struct sk_buff *skb, struct net_device *dev,
 		     netdev_features_t features);
 int fbnic_alloc_napi_vectors(struct fbnic_net *fbn);
+int fbnic_alloc_tx_ring_desc(struct fbnic_ring *txr, struct device *dev, const struct ethtool_ringparam *param);
+int fbnic_alloc_tx_ring_buffer(struct fbnic_ring *txr);
+int fbnic_alloc_rx_ring_desc(struct fbnic_ring *rxr, struct device *dev, u32 rxq_size);
+int fbnic_alloc_rx_ring_buffer(struct fbnic_ring *rxr);
+void fbnic_free_qt_resources(struct fbnic_net *fbn, struct fbnic_q_triad *qt);
 void fbnic_aggregate_ring_rx_counters(struct fbnic_net *fbn,
 				      struct fbnic_ring *rxr);
 void fbnic_aggregate_ring_tx_counters(struct fbnic_net *fbn,

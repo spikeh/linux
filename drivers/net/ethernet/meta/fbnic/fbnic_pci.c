@@ -14,6 +14,7 @@
 #include "fbnic.h"
 #include "fbnic_drvinfo.h"
 #include "fbnic_netdev.h"
+#include "fbnic_txrx.h"
 
 char fbnic_driver_name[] = "fbnic";
 
@@ -463,6 +464,13 @@ static int fbnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto ifm_hwmon_unregister;
 	}
 
+	netdev->nic_cfg_info.txq_mem_size = sizeof(struct fbnic_txq_mem);
+	netdev->nic_cfg_info.rxq_mem_size = sizeof(struct fbnic_rxq_mem);
+
+	err = netdev_nic_cfg_init(netdev);
+	if (err)
+		goto ifm_free_netdev;
+
 	err = fbnic_ptp_setup(fbd);
 	if (err)
 		goto ifm_free_netdev;
@@ -510,6 +518,7 @@ static void fbnic_remove(struct pci_dev *pdev)
 		fbnic_netdev_free(fbd);
 	}
 
+	netdev_nic_cfg_deinit(fbd->netdev);
 	fbnic_hwmon_unregister(fbd);
 	fbnic_fw_disable_mbx(fbd);
 	fbnic_free_irqs(fbd);

@@ -18,6 +18,7 @@ struct netdev_cfg {
 
 struct netdev_txq_cfg {
 	struct ethtool_ringparam ring;
+	struct kernel_ethtool_ringparam kring;
 };
 
 /**
@@ -75,6 +76,7 @@ void netdev_nic_cfg_deinit(struct net_device *netdev);
 int netdev_nic_cfg_start(struct net_device *netdev);
 void netdev_nic_cfg_stop(struct net_device *netdev);
 
+void *netdev_nic_cfg_txqmem(struct net_device *netdev, unsigned int qid);
 void *netdev_nic_cfg_rxqmem(struct net_device *netdev, unsigned int qid);
 
 /* Runtime config */

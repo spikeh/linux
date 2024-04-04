@@ -18,8 +18,8 @@ netdev_nic_cfg_txqmem_alloc(struct net_device *dev, struct netdev_nic_cfg *nic)
 	if (!nic->txqmem)
 		return -ENOMEM;
 
-	memcpy(&nic->rqcfg.ring, &nic->ring, sizeof(nic->ring));
-	memcpy(&nic->rqcfg.kring, &nic->kring, sizeof(nic->kring));
+	memcpy(&nic->tqcfg.ring, &nic->ring, sizeof(nic->ring));
+	memcpy(&nic->tqcfg.kring, &nic->kring, sizeof(nic->kring));
 
 	for (i = 0; i < nic->txq_cnt; i++) {
 		void *qmem = nic->txqmem + i * info->txq_mem_size;
@@ -115,6 +115,8 @@ int netdev_nic_cfg_init(struct net_device *dev)
 {
 	struct netdev_nic_cfg *nic;
 
+	if (WARN_ON(!dev->nic_cfg_info.txq_mem_size))
+		return -EINVAL;
 	if (WARN_ON(!dev->nic_cfg_info.rxq_mem_size))
 		return -EINVAL;
 
@@ -134,6 +136,7 @@ EXPORT_SYMBOL_GPL(netdev_nic_cfg_init);
 
 void netdev_nic_cfg_deinit(struct net_device *dev)
 {
+	WARN_ON(dev->nic_cfg->txqmem || dev->nic_cfg->txq_cnt);
 	WARN_ON(dev->nic_cfg->rxqmem || dev->nic_cfg->rxq_cnt);
 	WARN_ON(dev->nic_cfg->other_cfg);
 	if (dev->nic_cfg)
@@ -156,7 +159,9 @@ int netdev_nic_cfg_start(struct net_device *dev)
 		return -EINVAL;
 	}
 
+	nic->txq_cnt = dev->real_num_tx_queues;
 	nic->rxq_cnt = dev->real_num_rx_queues;
+	printk("----- netdev_nic_cfg_start: txq=%d, rxq=%d\n", nic->txq_cnt, nic->rxq_cnt);
 
 	err = netdev_nic_cfg_txqmem_alloc(dev, nic);
 	if (err)
@@ -169,6 +174,7 @@ int netdev_nic_cfg_start(struct net_device *dev)
 	return 0;
 
 err_clear_qcnt:
+	netdev_nic_cfg_txqmem_free(dev, nic);
 	nic->rxq_cnt = 0;
 err_clear_txqcnt:
 	nic->txq_cnt = 0;
@@ -178,7 +184,9 @@ EXPORT_SYMBOL_GPL(netdev_nic_cfg_start);
 
 void netdev_nic_cfg_stop(struct net_device *dev)
 {
+	netdev_nic_cfg_txqmem_free(dev, dev->nic_cfg);
 	netdev_nic_cfg_rxqmem_free(dev, dev->nic_cfg);
+	dev->nic_cfg->txq_cnt = 0;
 	dev->nic_cfg->rxq_cnt = 0;
 }
 EXPORT_SYMBOL_GPL(netdev_nic_cfg_stop);
@@ -193,6 +201,16 @@ void *netdev_nic_cfg_rxqmem(struct net_device *dev, unsigned int qid)
 }
 EXPORT_SYMBOL_GPL(netdev_nic_cfg_rxqmem);
 
+void *netdev_nic_cfg_txqmem(struct net_device *dev, unsigned int qid)
+{
+	struct netdev_nic_cfg *nic = dev->nic_cfg;
+
+	if (WARN_ON_ONCE(qid >= nic->txq_cnt))
+		return NULL;
+	return nic->txqmem + qid * dev->nic_cfg_info.txq_mem_size;
+}
+EXPORT_SYMBOL_GPL(netdev_nic_cfg_txqmem);
+
 int netdev_nic_recfg_start(struct net_device *dev)
 {
 	struct netdev_nic_cfg *new_cfg;
@@ -204,8 +222,11 @@ int netdev_nic_recfg_start(struct net_device *dev)
 	if (!new_cfg)
 		return -ENOMEM;
 
+	memset(&new_cfg->tqcfg, 0, sizeof(new_cfg->tqcfg));
 	memset(&new_cfg->rqcfg, 0, sizeof(new_cfg->rqcfg));
+	new_cfg->txq_cnt = 0;
 	new_cfg->rxq_cnt = 0;
+	new_cfg->txqmem = NULL;
 	new_cfg->rxqmem = NULL;
 
 	dev->nic_cfg->other_cfg = new_cfg;
