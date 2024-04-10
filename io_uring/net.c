@@ -1010,15 +1010,16 @@ int io_recvzc_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	if (READ_ONCE(sqe->len) || READ_ONCE(sqe->addr3))
 		return -EINVAL;
 
+	/* All data completions are posted as aux CQEs. */
+	req->flags |= REQ_F_APOLL_MULTISHOT;
+
 	zc->flags = READ_ONCE(sqe->ioprio);
 	zc->msg_flags = READ_ONCE(sqe->msg_flags);
-
 	if (zc->msg_flags)
 		return -EINVAL;
 	if (zc->flags & ~RECVMSG_FLAGS)
 		return -EINVAL;
-	if (zc->flags & IORING_RECV_MULTISHOT)
-		req->flags |= REQ_F_APOLL_MULTISHOT;
+
 #ifdef CONFIG_COMPAT
 	if (req->ctx->compat)
 		zc->msg_flags |= MSG_CMSG_COMPAT;
@@ -1033,16 +1034,6 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 	struct socket *sock;
 	int ret;
 
-	/*
-	 * We're posting CQEs deeper in the stack, and to avoid taking CQ locks
-	 * we serialise by having only the master thread modifying the CQ with
-	 * DEFER_TASkRUN checked earlier and forbidding executing it from io-wq.
-	 * That's similar to io_check_multishot() for multishot CQEs.
-	 */
-	if (issue_flags & IO_URING_F_IOWQ)
-		return -EAGAIN;
-	if (WARN_ON_ONCE(!(issue_flags & IO_URING_F_NONBLOCK)))
-		return -EAGAIN;
 	if (!(req->flags & REQ_F_POLLED) &&
 	    (zc->flags & IORING_RECVSEND_POLL_FIRST))
 		return -EAGAIN;
