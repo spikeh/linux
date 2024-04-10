@@ -1002,9 +1002,6 @@ int io_recvzc_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_recvzc *zc = io_kiocb_to_cmd(req, struct io_recvzc);
 
-	/* non-iopoll defer_taskrun only */
-	if (!req->ctx->task_complete)
-		return -EINVAL;
 	if (unlikely(sqe->file_index || sqe->addr2))
 		return -EINVAL;
 	if (READ_ONCE(sqe->len) || READ_ONCE(sqe->addr3))
