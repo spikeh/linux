@@ -1043,12 +1043,7 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 		return -EINVAL;
 
 	ret = io_zc_rx_recv(req, ifq, sock, zc->msg_flags | MSG_DONTWAIT);
-	if (unlikely(ret <= 0)) {
-		if (ret == -EAGAIN) {
-			if (issue_flags & IO_URING_F_MULTISHOT)
-				return IOU_ISSUE_SKIP_COMPLETE;
-			return -EAGAIN;
-		}
+	if (unlikely(ret <= 0) && ret != -EAGAIN) {
 		if (ret == -ERESTARTSYS)
 			ret = -EINTR;
 
