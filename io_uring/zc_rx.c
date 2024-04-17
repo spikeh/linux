@@ -22,10 +22,13 @@
 #include "zc_rx.h"
 #include "rsrc.h"
 
+#define IO_SKBS_PER_CALL_LIMIT	20
+
 struct io_zc_rx_args {
 	struct io_kiocb		*req;
 	struct io_zc_rx_ifq	*ifq;
 	struct socket		*sock;
+	unsigned		nr_skbs;
 };
 
 struct io_zc_refill_data {
@@ -796,6 +799,9 @@ zc_rx_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 	int i, copy, end, off;
 	int ret = 0;
 
+	if (unlikely(args->nr_skbs++) > IO_SKBS_PER_CALL_LIMIT)
+		return -EAGAIN;
+
 	if (unlikely(offset < skb_headlen(skb))) {
 		ssize_t copied;
 		size_t to_copy;
@@ -873,7 +879,8 @@ out:
 }
 
 static int io_zc_rx_tcp_recvmsg(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
-				struct sock *sk, int flags)
+				struct sock *sk, int flags,
+				unsigned int issue_flags)
 {
 	struct io_zc_rx_args args = {
 		.req = req,
@@ -899,6 +906,9 @@ static int io_zc_rx_tcp_recvmsg(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
 			ret = -ENOTCONN;
 		else
 			ret = -EAGAIN;
+	} else if (unlikely(args.nr_skbs > IO_SKBS_PER_CALL_LIMIT) &&
+		   (issue_flags & IO_URING_F_MULTISHOT)) {
+		ret = IOU_REQUEUE;
 	} else if (sock_flag(sk, SOCK_DONE)) {
 		/* Make it to retry until it finally gets 0. */
 		ret = -EAGAIN;
@@ -909,7 +919,8 @@ out:
 }
 
 int io_zc_rx_recv(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
-		  struct socket *sock, unsigned int flags)
+		  struct socket *sock, unsigned int flags,
+		  unsigned int issue_flags)
 {
 	struct sock *sk = sock->sk;
 	const struct proto *prot = READ_ONCE(sk->sk_prot);
@@ -918,7 +929,7 @@ int io_zc_rx_recv(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
 		return -EPROTONOSUPPORT;
 
 	sock_rps_record_flow(sk);
-	return io_zc_rx_tcp_recvmsg(req, ifq, sk, flags);
+	return io_zc_rx_tcp_recvmsg(req, ifq, sk, flags, issue_flags);
 }
 
 #endif
