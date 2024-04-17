@@ -227,10 +227,10 @@ static void io_shutdown_ifq(struct io_zc_rx_ifq *ifq)
 static void io_zc_rx_ifq_free(struct io_zc_rx_ifq *ifq)
 {
 	io_shutdown_ifq(ifq);
-	if (ifq->pool)
-		io_zc_rx_free_pool(ifq->pool);
 	if (ifq->if_rxq_id != -1)
 		io_close_zc_rxq(ifq);
+	if (ifq->pool)
+		io_zc_rx_free_pool(ifq->pool);
 	if (ifq->dev)
 		dev_put(ifq->dev);
 	io_free_rbuf_ring(ifq);
