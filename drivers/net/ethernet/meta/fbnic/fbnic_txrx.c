@@ -2031,8 +2031,29 @@ static void fbnic_free_ring_resources(struct device *dev,
 	ring->size = 0;
 }
 
-static int fbnic_alloc_tx_ring_desc(struct fbnic_net *fbn,
-				    struct fbnic_ring *txr)
+int fbnic_alloc_tx_ring_desc(struct fbnic_ring *txr,
+			     struct device *dev,
+			     const struct ethtool_ringparam *param)
+{
+	size_t txq_size = param->tx_pending;
+	size_t size;
+
+	/* round size up to nearest 4K */
+	size = ALIGN(array_size(sizeof(*txr->desc), txq_size), 4096);
+	txr->desc = dma_alloc_coherent(dev, size, &txr->dma,
+				       GFP_KERNEL | __GFP_NOWARN);
+	if (!txr->desc)
+		return -ENOMEM;
+
+	/* txq_size should be a power of 2, so mask is just that -1 */
+	txr->size_mask = txq_size - 1;
+	txr->size = size;
+
+	return 0;
+}
+
+static int __fbnic_alloc_tx_ring_desc(struct fbnic_net *fbn,
+				      struct fbnic_ring *txr)
 {
 	struct device *dev = fbn->netdev->dev.parent;
 	size_t size;
@@ -2052,7 +2073,7 @@ static int fbnic_alloc_tx_ring_desc(struct fbnic_net *fbn,
 	return 0;
 }
 
-static int fbnic_alloc_tx_ring_buffer(struct fbnic_ring *txr)
+int fbnic_alloc_tx_ring_buffer(struct fbnic_ring *txr)
 {
 	size_t size = array_size(sizeof(*txr->tx_buf), txr->size_mask + 1);
 
@@ -2070,7 +2091,7 @@ static int fbnic_alloc_tx_ring_resources(struct fbnic_net *fbn,
 	if (txr->flags & FBNIC_RING_F_DISABLED)
 		return 0;
 
-	err = fbnic_alloc_tx_ring_desc(fbn, txr);
+	err = __fbnic_alloc_tx_ring_desc(fbn, txr);
 	if (err)
 		return err;
 
@@ -2088,7 +2109,28 @@ free_desc:
 	return err;
 }
 
-static int fbnic_alloc_rx_ring_desc(struct fbnic_net *fbn,
+int fbnic_alloc_rx_ring_desc(struct fbnic_ring *rxr,
+					   struct device *dev,
+					   u32 rxq_size)
+{
+	size_t size;
+
+	/* round size up to nearest 4K */
+	size = ALIGN(array_size(sizeof(*rxr->desc), rxq_size), 4096);
+
+	rxr->desc = dma_alloc_coherent(dev, size, &rxr->dma,
+				       GFP_KERNEL | __GFP_NOWARN);
+	if (!rxr->desc)
+		return -ENOMEM;
+
+	/* rxq_size should be a power of 2, so mask is just that -1 */
+	rxr->size_mask = rxq_size - 1;
+	rxr->size = size;
+
+	return 0;
+}
+
+static int __fbnic_alloc_rx_ring_desc(struct fbnic_net *fbn,
 				    struct fbnic_ring *rxr)
 {
 	struct device *dev = fbn->netdev->dev.parent;
@@ -2124,7 +2166,7 @@ static int fbnic_alloc_rx_ring_desc(struct fbnic_net *fbn,
 	return 0;
 }
 
-static int fbnic_alloc_rx_ring_buffer(struct fbnic_ring *rxr)
+int fbnic_alloc_rx_ring_buffer(struct fbnic_ring *rxr)
 {
 	size_t size = array_size(sizeof(*rxr->rx_buf), rxr->size_mask + 1);
 
@@ -2144,7 +2186,7 @@ static int fbnic_alloc_rx_ring_resources(struct fbnic_net *fbn,
 	struct device *dev = fbn->netdev->dev.parent;
 	int err;
 
-	err = fbnic_alloc_rx_ring_desc(fbn, rxr);
+	err = __fbnic_alloc_rx_ring_desc(fbn, rxr);
 	if (err)
 		return err;
 
@@ -2159,8 +2201,8 @@ free_desc:
 	return err;
 }
 
-static void fbnic_free_qt_resources(struct fbnic_net *fbn,
-				    struct fbnic_q_triad *qt)
+void fbnic_free_qt_resources(struct fbnic_net *fbn,
+			     struct fbnic_q_triad *qt)
 {
 	struct device *dev = fbn->netdev->dev.parent;
 

@@ -5,6 +5,7 @@
 #include <linux/ipv6.h>
 #include <linux/types.h>
 #include <net/pkt_sched.h>
+#include <net/page_pool/helpers.h>
 
 #include "fbnic.h"
 #include "fbnic_fw.h"
@@ -14,6 +15,8 @@
 #define DEFAULT_MSG_ENABLE \
 	(NETIF_MSG_DRV | NETIF_MSG_PROBE | NETIF_MSG_LINK)
 #define MSG_ENABLE_MASK		(((u32)1 << NETIF_MSG_CLASS_COUNT) - 1)
+#define FBNIC_PAGE_POOL_FLAGS \
+	(PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV)
 
 static unsigned int debug_mask = DEFAULT_MSG_ENABLE;
 module_param(debug_mask, int, 0);
@@ -628,6 +631,248 @@ static int fbnic_setup_tc(struct net_device *netdev,
 	return fbnic_setup_tc_etf(netdev, data);
 }
 
+static bool fbnic_queue_is_split(unsigned int napi, unsigned int tx, unsigned int rx)
+{
+	return napi < FBNIC_MAX_TXQS && napi == tx + rx;
+}
+
+static int fbnic_tx_queue_type(struct ethtool_channels *ch, unsigned int max_napis, int i)
+{
+	unsigned int txq_cnt, rxq_cnt, napi_cnt;
+
+	rxq_cnt = ch->rx_count + ch->combined_count;
+	txq_cnt = ch->tx_count + ch->combined_count;
+	napi_cnt = min(ch->rx_count + ch->tx_count + ch->combined_count,
+			    max_napis);
+
+	if (fbnic_queue_is_split(napi_cnt, txq_cnt, rxq_cnt) || i >= rxq_cnt)
+		return FBNIC_NV_TYPE_TX_ONLY;
+
+	return FBNIC_NV_TYPE_COMBINED;
+}
+
+static int fbnic_rx_queue_type(struct ethtool_channels *ch, unsigned int max_napis, int i)
+{
+	unsigned int txq_cnt, rxq_cnt, napi_cnt;
+
+	rxq_cnt = ch->rx_count + ch->combined_count;
+	txq_cnt = ch->tx_count + ch->combined_count;
+	napi_cnt = min(ch->rx_count + ch->tx_count + ch->combined_count,
+			    max_napis);
+
+	if (fbnic_queue_is_split(napi_cnt, txq_cnt, rxq_cnt) || i >= txq_cnt)
+		return FBNIC_NV_TYPE_RX_ONLY;
+
+	return FBNIC_NV_TYPE_COMBINED;
+}
+
+static int fbnic_tx_queue_mem_alloc(struct net_device *dev,
+				    const struct netdev_cfg *dcfg,
+				    const struct netdev_txq_cfg *qcfg,
+				    void *qmem,
+				    int idx)
+{
+	struct fbnic_net *fbn = netdev_priv(dev);
+	struct device *pdev = dev->dev.parent;
+	struct fbnic_dev *fbd = fbn->fbd;
+	struct fbnic_txq_mem *txq_mem;
+	struct fbnic_ring *txr;
+	unsigned int max_napis;
+	bool alloc = true;
+	int type, err;
+
+	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
+	type = fbnic_tx_queue_type(&dcfg->chan, max_napis, idx);
+
+	if (dev->nic_cfg->recfg) {
+		struct netdev_nic_cfg *old, *new;
+
+		old = dev->nic_cfg;
+		new = old->other_cfg;
+
+		/* do not realloc if params unchanged */
+		if (idx < old->txq_cnt &&
+		    old->txq_cfg.ring.tx_pending == new->txq_cfg.ring.tx_pending)
+			alloc = false;
+
+		/* prevent reused qmem from being freed later */
+		if (!alloc) {
+			txq_mem = netdev_nic_cfg_txqmem(dev, old, idx);
+
+			memset(&txq_mem->qt.sub0, 0, sizeof(struct fbnic_ring));
+			memset(&txq_mem->qt.sub1, 0, sizeof(struct fbnic_ring));
+			memset(&txq_mem->qt.cmpl, 0, sizeof(struct fbnic_ring));
+		}
+	}
+
+	txq_mem = qmem;
+	txq_mem->type = type;
+
+	if (!alloc)
+		return 0;
+
+	memset(txq_mem, 0, sizeof(*txq_mem));
+
+	/* TODO: error checking */
+	txr = &txq_mem->qt.sub0;
+	fbnic_alloc_tx_ring_desc(txr, pdev, &qcfg->ring);
+	fbnic_alloc_tx_ring_buffer(txr);
+
+	txr = &txq_mem->qt.cmpl;
+	fbnic_alloc_tx_ring_desc(txr, pdev, &qcfg->ring);
+
+	/* only alloc xdp queue if there is a paired rx queue */
+	if (type == FBNIC_NV_TYPE_COMBINED) {
+		txr = &txq_mem->qt.sub1;
+		fbnic_alloc_tx_ring_desc(txr, pdev, &qcfg->ring);
+		fbnic_alloc_tx_ring_buffer(txr);
+	}
+
+	return 0;
+}
+
+static void fbnic_tx_queue_mem_free(struct net_device *dev,
+				    const struct netdev_cfg *dcfg,
+				    const struct netdev_txq_cfg *qcfg,
+				    void *qmem,
+				    int idx)
+{
+	struct fbnic_net *fbn = netdev_priv(dev);
+	struct fbnic_txq_mem *txq_mem = qmem;
+
+	fbnic_free_qt_resources(fbn, &txq_mem->qt);
+}
+
+static int fbnic_rx_queue_mem_alloc(struct net_device *dev,
+				    const struct netdev_cfg *dcfg,
+				    const struct netdev_rxq_cfg *qcfg,
+				    void *qmem,
+				    int idx)
+{
+	const struct ethtool_ringparam *params = &qcfg->ring;
+	struct fbnic_net *fbn = netdev_priv(dev);
+	struct device *pdev = dev->dev.parent;
+	struct fbnic_dev *fbd = fbn->fbd;
+	struct fbnic_rxq_mem *rxq_mem;
+	struct fbnic_ring *rxr;
+	unsigned int max_napis;
+	bool alloc_sub0 = true;
+	bool alloc_sub1 = true;
+	bool alloc_cmpl = true;
+	bool alloc_xdp = false;
+	int type;
+
+	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
+	type = fbnic_rx_queue_type(&dcfg->chan, max_napis, idx);
+	if (type == FBNIC_NV_TYPE_RX_ONLY)
+		alloc_xdp = true;
+
+	if (dev->nic_cfg->recfg) {
+		struct netdev_nic_cfg *old, *new;
+
+		old = dev->nic_cfg;
+		new = old->other_cfg;
+
+		if (idx >= old->rxq_cnt)
+			goto alloc;
+
+		/* do not realloc if params unchanged */
+		if (old->rxq_cfg.ring.rx_mini_pending == new->rxq_cfg.ring.rx_mini_pending)
+			alloc_sub0 = false;
+		if (old->rxq_cfg.ring.rx_jumbo_pending == new->rxq_cfg.ring.rx_jumbo_pending)
+			alloc_sub1 = false;
+		if (old->rxq_cfg.ring.rx_pending == new->rxq_cfg.ring.rx_pending)
+			alloc_cmpl = false;
+
+		rxq_mem = netdev_nic_cfg_rxqmem(dev, old, idx);
+		if (type == FBNIC_NV_TYPE_RX_ONLY && rxq_mem->type == FBNIC_NV_TYPE_RX_ONLY)
+			alloc_xdp = false;
+
+		/* prevent reused qmem from being freed later */
+		if (!alloc_sub0)
+			memset(&rxq_mem->qt.sub0, 0, sizeof(struct fbnic_ring));
+		if (!alloc_sub1)
+			memset(&rxq_mem->qt.sub1, 0, sizeof(struct fbnic_ring));
+		if (!alloc_cmpl)
+			memset(&rxq_mem->qt.cmpl, 0, sizeof(struct fbnic_ring));
+		if (!alloc_xdp) {
+			memset(&rxq_mem->xdp_qt.sub1, 0, sizeof(struct fbnic_ring));
+			memset(&rxq_mem->xdp_qt.cmpl, 0, sizeof(struct fbnic_ring));
+		}
+	}
+
+alloc:
+	rxq_mem = qmem;
+	if (alloc_sub0) {
+		rxr = &rxq_mem->qt.sub0;
+		memset(rxr, 0, sizeof(*rxr));
+		rxr->flags = FBNIC_RING_F_CTX;
+		fbnic_alloc_rx_ring_desc(rxr, pdev, params->rx_mini_pending);
+		fbnic_alloc_rx_ring_buffer(rxr);
+	}
+
+	if (alloc_sub1) {
+		rxr = &rxq_mem->qt.sub1;
+		memset(rxr, 0, sizeof(*rxr));
+		rxr->flags = FBNIC_RING_F_CTX;
+		fbnic_alloc_rx_ring_desc(rxr, pdev, params->rx_jumbo_pending);
+		fbnic_alloc_rx_ring_buffer(rxr);
+	}
+
+	if (alloc_cmpl) {
+		rxr = &rxq_mem->qt.cmpl;
+		memset(rxr, 0, sizeof(*rxr));
+		rxr->flags = FBNIC_RING_F_STATS;
+		fbnic_alloc_rx_ring_desc(rxr, pdev, params->rx_pending);
+		fbnic_alloc_rx_ring_buffer(rxr);
+	}
+
+	if (alloc_xdp) {
+		rxr = &rxq_mem->xdp_qt.sub1;
+		memset(rxr, 0, sizeof(*rxr));
+		fbnic_alloc_tx_ring_desc(rxr, pdev, params);
+		fbnic_alloc_tx_ring_buffer(rxr);
+
+		rxr = &rxq_mem->xdp_qt.cmpl;
+		memset(rxr, 0, sizeof(*rxr));
+		fbnic_alloc_tx_ring_desc(rxr, pdev, params);
+	}
+
+	struct page_pool_params pp_params = {
+		.order = 0,
+		.flags = FBNIC_PAGE_POOL_FLAGS,
+		.pool_size = params->rx_mini_pending + params->rx_jumbo_pending,
+		.nid = NUMA_NO_NODE,
+		.dev = pdev,
+		.dma_dir = DMA_BIDIRECTIONAL,
+#ifndef KCOMPAT_NEED_DMA_SYNC_DEV
+		.offset = 0,
+		.max_len = PAGE_SIZE
+#endif
+	};
+
+	if (pp_params.pool_size > 32768)
+		pp_params.pool_size = 32768;
+
+	rxq_mem->page_pool = page_pool_create(&pp_params);
+	rxq_mem->type = type;
+
+	return 0;
+}
+
+static void fbnic_rx_queue_mem_free(struct net_device *dev,
+				    const struct netdev_cfg *dcfg,
+				    const struct netdev_rxq_cfg *qcfg,
+				    void *qmem, int idx) {
+	struct fbnic_net *fbn = netdev_priv(dev);
+	struct fbnic_rxq_mem *rxq_mem = qmem;
+
+	fbnic_free_qt_resources(fbn, &rxq_mem->qt);
+	fbnic_free_qt_resources(fbn, &rxq_mem->xdp_qt);
+
+	page_pool_destroy(rxq_mem->page_pool);
+}
+
 static const struct net_device_ops fbnic_netdev_ops = {
 	.ndo_open		= fbnic_open,
 	.ndo_stop		= fbnic_stop,
@@ -641,6 +886,10 @@ static const struct net_device_ops fbnic_netdev_ops = {
 	.ndo_get_stats64	= fbnic_get_stats64,
 	.ndo_bpf		= fbnic_bpf,
 	.ndo_setup_tc		= fbnic_setup_tc,
+	.ndo_tx_queue_mem_alloc	= fbnic_tx_queue_mem_alloc,
+	.ndo_tx_queue_mem_free	= fbnic_tx_queue_mem_free,
+	.ndo_rx_queue_mem_alloc	= fbnic_rx_queue_mem_alloc,
+	.ndo_rx_queue_mem_free	= fbnic_rx_queue_mem_free,
 };
 
 void fbnic_reset_queues(struct fbnic_net *fbn,
