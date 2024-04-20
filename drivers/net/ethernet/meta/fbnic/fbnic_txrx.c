@@ -1652,8 +1652,6 @@ void fbnic_aggregate_ring_tx_counters(struct fbnic_net *fbn,
 static void fbnic_remove_tx_ring(struct fbnic_net *fbn,
 				 struct fbnic_ring *txr)
 {
-	WARN_ON(txr->rplc);
-
 	if (!(txr->flags & FBNIC_RING_F_STATS))
 		return;
 
@@ -1670,8 +1668,6 @@ static void fbnic_remove_tx_ring(struct fbnic_net *fbn,
 static void fbnic_remove_xdp_ring(struct fbnic_net *fbn,
 				  struct fbnic_ring *xdpr)
 {
-	WARN_ON(xdpr->rplc);
-
 	if (!(xdpr->flags & FBNIC_RING_F_STATS))
 		return;
 
@@ -1685,8 +1681,6 @@ static void fbnic_remove_xdp_ring(struct fbnic_net *fbn,
 static void fbnic_remove_rx_ring(struct fbnic_net *fbn,
 				 struct fbnic_ring *rxr)
 {
-	WARN_ON(rxr->rplc);
-
 	if (!(rxr->flags & FBNIC_RING_F_STATS))
 		return;
 
@@ -2049,27 +2043,6 @@ int fbnic_alloc_tx_ring_desc(struct fbnic_ring *txr,
 	return 0;
 }
 
-static int __fbnic_alloc_tx_ring_desc(struct fbnic_net *fbn,
-				      struct fbnic_ring *txr)
-{
-	struct device *dev = fbn->netdev->dev.parent;
-	size_t size;
-
-	/* round size up to nearest 4K */
-	size = ALIGN(array_size(sizeof(*txr->desc), fbn->txq_size), 4096);
-
-	txr->desc = dma_alloc_coherent(dev, size, &txr->dma,
-				       GFP_KERNEL | __GFP_NOWARN);
-	if (!txr->desc)
-		return -ENOMEM;
-
-	/* txq_size should be a power of 2, so mask is just that -1 */
-	txr->size_mask = fbn->txq_size - 1;
-	txr->size = size;
-
-	return 0;
-}
-
 int fbnic_alloc_tx_ring_buffer(struct fbnic_ring *txr)
 {
 	size_t size = array_size(sizeof(*txr->tx_buf), txr->size_mask + 1);
@@ -2079,74 +2052,11 @@ int fbnic_alloc_tx_ring_buffer(struct fbnic_ring *txr)
 	return txr->tx_buf ? 0 : -ENOMEM;
 }
 
-static int fbnic_alloc_tx_ring_resources(struct fbnic_net *fbn,
-					 struct fbnic_ring *txr)
-{
-	struct device *dev = fbn->netdev->dev.parent;
-	int err;
-
-	if (txr->flags & FBNIC_RING_F_DISABLED)
-		return 0;
-
-	err = __fbnic_alloc_tx_ring_desc(fbn, txr);
-	if (err)
-		return err;
-
-	if (!(txr->flags & FBNIC_RING_F_CTX))
-		return 0;
-
-	err = fbnic_alloc_tx_ring_buffer(txr);
-	if (err)
-		goto free_desc;
-
-	return 0;
-
-free_desc:
-	fbnic_free_ring_resources(dev, txr);
-	return err;
-}
-
 int fbnic_alloc_rx_ring_desc(struct fbnic_ring *rxr,
 					   struct device *dev,
 					   u32 rxq_size)
 {
 	size_t size;
-
-	/* round size up to nearest 4K */
-	size = ALIGN(array_size(sizeof(*rxr->desc), rxq_size), 4096);
-
-	rxr->desc = dma_alloc_coherent(dev, size, &rxr->dma,
-				       GFP_KERNEL | __GFP_NOWARN);
-	if (!rxr->desc)
-		return -ENOMEM;
-
-	/* rxq_size should be a power of 2, so mask is just that -1 */
-	rxr->size_mask = rxq_size - 1;
-	rxr->size = size;
-
-	return 0;
-}
-
-static int __fbnic_alloc_rx_ring_desc(struct fbnic_net *fbn,
-				    struct fbnic_ring *rxr)
-{
-	struct device *dev = fbn->netdev->dev.parent;
-	u32 rxq_size;
-	size_t size;
-
-	switch (rxr->doorbell - fbnic_ring_csr_base(rxr)) {
-	case FBNIC_QUEUE_BDQ_HPQ_TAIL:
-		rxq_size = fbn->hpq_size;
-		break;
-	case FBNIC_QUEUE_BDQ_PPQ_TAIL:
-		rxq_size = fbn->ppq_size;
-		break;
-	case FBNIC_QUEUE_RCQ_HEAD:
-		rxq_size = fbn->rcq_size;
-		break;
-	default:
-		return -EINVAL;
-	}
 
 	/* round size up to nearest 4K */
 	size = ALIGN(array_size(sizeof(*rxr->desc), rxq_size), 4096);
@@ -2175,27 +2085,6 @@ int fbnic_alloc_rx_ring_buffer(struct fbnic_ring *rxr)
 	rxr->rx_buf = kvzalloc(size, GFP_KERNEL | __GFP_NOWARN);
 
 	return rxr->rx_buf ? 0 : -ENOMEM;
-}
-
-static int fbnic_alloc_rx_ring_resources(struct fbnic_net *fbn,
-					 struct fbnic_ring *rxr)
-{
-	struct device *dev = fbn->netdev->dev.parent;
-	int err;
-
-	err = __fbnic_alloc_rx_ring_desc(fbn, rxr);
-	if (err)
-		return err;
-
-	err = fbnic_alloc_rx_ring_buffer(rxr);
-	if (err)
-		goto free_desc;
-
-	return 0;
-
-free_desc:
-	fbnic_free_ring_resources(dev, rxr);
-	return err;
 }
 
 void fbnic_free_qt_resources(struct fbnic_net *fbn,
@@ -2924,149 +2813,34 @@ void fbnic_napi_depletion_check(struct net_device *netdev)
 	wrfl();
 }
 
-static void fbnic_rplc_ring_free(struct fbnic_net *fbn, struct fbnic_ring *ring)
-{
-	struct device *dev = fbn->netdev->dev.parent;
-
-	if (!ring->rplc)
-		return;
-	fbnic_free_ring_resources(dev, ring->rplc);
-	kfree(ring->rplc);
-	ring->rplc = NULL;
-}
-
-void fbnic_rplc_free_rings(struct fbnic_net *fbn)
+void fbnic_rplc_swap_rings(struct fbnic_net *fbn, struct netdev_nic_cfg *nic)
 {
 	struct fbnic_napi_vector *nv;
+	struct fbnic_txq_mem *txqmem;
+	struct fbnic_rxq_mem *rxqmem;
+	int idx = 0;
 
-	list_for_each_entry(nv, &fbn->napis, napis) {
-		int i;
+	list_for_each_entry_reverse(nv, &fbn->napis, napis) {
+		if (nv->type == FBNIC_NV_TYPE_COMBINED) {
+			txqmem = netdev_nic_cfg_txqmem(fbn->netdev, nic, idx);
+			rxqmem = netdev_nic_cfg_rxqmem(fbn->netdev, nic, idx);
 
-		for (i = 0; i < nv->txt_count + nv->rxt_count; i++) {
-			struct fbnic_q_triad *qt = &nv->qt[i];
+			fbnic_copy_qt_resources(&nv->qt[0], &txqmem->qt);
+			fbnic_copy_qt_resources(&nv->qt[1], &rxqmem->qt);
+			txqmem->nv = nv;
+			rxqmem->nv = nv;
+		} else if (nv->type == FBNIC_NV_TYPE_TX_ONLY) {
+			txqmem = netdev_nic_cfg_txqmem(fbn->netdev, nic, idx);
 
-			fbnic_rplc_ring_free(fbn, &qt->sub0);
-			fbnic_rplc_ring_free(fbn, &qt->sub1);
-			fbnic_rplc_ring_free(fbn, &qt->cmpl);
+			fbnic_copy_qt_resources(&nv->qt[0], &txqmem->qt);
+			txqmem->nv = nv;
+		} else {
+			rxqmem = netdev_nic_cfg_rxqmem(fbn->netdev, nic, idx - fbn->num_tx_queues);
+
+			fbnic_copy_qt_resources(&nv->qt[1], &rxqmem->qt);
+			rxqmem->nv = nv;
 		}
-	}
-}
 
-static int fbnic_rplc_ring_alloc(struct fbnic_net *clone,
-				 struct fbnic_ring *ring, bool rx)
-{
-	int err;
-
-	ring->rplc = kzalloc(sizeof(*ring), GFP_KERNEL);
-	if (!ring->rplc)
-		return -ENOMEM;
-
-	fbnic_ring_init(ring->rplc, ring->doorbell, ring->q_idx, ring->flags);
-
-	if (rx)
-		err = fbnic_alloc_rx_ring_resources(clone, ring->rplc);
-	else
-		err = fbnic_alloc_tx_ring_resources(clone, ring->rplc);
-	if (err)
-		goto err_free_ring;
-
-	return 0;
-
-err_free_ring:
-	kfree(ring->rplc);
-	ring->rplc = NULL;
-	return err;
-}
-
-static int fbnic_nv_rplc_alloc_rings(struct fbnic_net *orig,
-				     struct fbnic_net *clone,
-				     struct fbnic_napi_vector *nv)
-{
-	int err, i, j;
-
-	for (i = 0; i < nv->txt_count; i++) {
-		struct fbnic_q_triad *qt = &nv->qt[i];
-
-		if (orig->txq_size != clone->txq_size) {
-			err = fbnic_rplc_ring_alloc(clone, &qt->sub0, false);
-			if (err)
-				return err;
-
-			err = fbnic_rplc_ring_alloc(clone, &qt->sub1, false);
-			if (err)
-				return err;
-
-			err = fbnic_rplc_ring_alloc(clone, &qt->cmpl, false);
-			if (err)
-				return err;
-		}
-	}
-
-	for (j = 0; j < nv->rxt_count; j++, i++) {
-		struct fbnic_q_triad *qt = &nv->qt[i];
-
-		if (orig->hpq_size != clone->hpq_size) {
-			err = fbnic_rplc_ring_alloc(clone, &qt->sub0, true);
-			if (err)
-				return err;
-		}
-		if (orig->ppq_size != clone->ppq_size) {
-			err = fbnic_rplc_ring_alloc(clone, &qt->sub1, true);
-			if (err)
-				return err;
-		}
-		if (orig->rcq_size != clone->rcq_size) {
-			err = fbnic_rplc_ring_alloc(clone, &qt->cmpl, true);
-			if (err)
-				return err;
-		}
-	}
-
-	return 0;
-}
-
-int fbnic_rplc_alloc_rings(struct fbnic_net *orig, struct fbnic_net *clone)
-{
-	struct fbnic_napi_vector *nv;
-	int err;
-
-	list_for_each_entry(nv, &orig->napis, napis) {
-		err = fbnic_nv_rplc_alloc_rings(orig, clone, nv);
-		if (err)
-			goto err_rplc_free;
-	}
-
-	return 0;
-
-err_rplc_free:
-	fbnic_rplc_free_rings(clone);
-	return err;
-}
-
-static void fbnic_rplc_ring_swap(struct fbnic_net *fbn, struct fbnic_ring *ring)
-{
-	if (!ring->rplc)
-		return;
-	swap(ring->buffer, ring->rplc->buffer);
-	swap(ring->desc, ring->rplc->desc);
-	swap(ring->dma, ring->rplc->dma);
-	swap(ring->size, ring->rplc->size);
-	swap(ring->size_mask, ring->rplc->size_mask);
-}
-
-void fbnic_rplc_swap_rings(struct fbnic_net *fbn)
-{
-	struct fbnic_napi_vector *nv;
-
-	list_for_each_entry(nv, &fbn->napis, napis) {
-		int i;
-
-		for (i = 0; i < nv->txt_count + nv->rxt_count; i++) {
-			struct fbnic_q_triad *qt = &nv->qt[i];
-
-			fbnic_rplc_ring_swap(fbn, &qt->sub0);
-			fbnic_rplc_ring_swap(fbn, &qt->sub1);
-			fbnic_rplc_ring_swap(fbn, &qt->cmpl);
-		}
+		idx++;
 	}
 }

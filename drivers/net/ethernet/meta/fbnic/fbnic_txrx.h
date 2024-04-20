@@ -120,7 +120,6 @@ struct fbnic_ring {
 	/* slow path fields follow */
 	dma_addr_t dma;			/* phys addr of descriptor memory */
 	size_t size;			/* size of descriptor ring in memory */
-	struct fbnic_ring *rplc;	/* replacement ring used during recfg */
 };
 
 struct fbnic_q_triad {
@@ -199,9 +198,8 @@ u32 __iomem *fbnic_ring_csr_base(const struct fbnic_ring *ring);
 void fbnic_napi_depletion_check(struct net_device *netdev);
 int fbnic_wait_all_queues_idle(struct fbnic_dev *fbd, bool may_fail);
 
-int fbnic_rplc_alloc_rings(struct fbnic_net *orig, struct fbnic_net *clone);
 void fbnic_rplc_free_rings(struct fbnic_net *orig);
-void fbnic_rplc_swap_rings(struct fbnic_net *orig);
+void fbnic_rplc_swap_rings(struct fbnic_net *orig, struct netdev_nic_cfg *clone);
 
 void fbnic_clean_tcq(struct fbnic_napi_vector *nv, struct fbnic_q_triad *qt,
 		     int napi_budget);

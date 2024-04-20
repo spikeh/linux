@@ -653,7 +653,7 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
-	struct fbnic_net *clone;
+	struct netdev_nic_cfg *clone;
 	int err;
 
 	ring->rx_pending	= roundup_pow_of_two(ring->rx_pending);
@@ -683,15 +683,11 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 		return 0;
 	}
 
-	clone = fbnic_clone_create(fbn);
-	if (!clone)
-		return -ENOMEM;
-
-	fbnic_set_rings(clone, ring);
-
-	err = fbnic_rplc_alloc_rings(fbn, clone);
-	if (err)
-		goto err_free_clone;
+	netdev_nic_recfg_start(netdev);
+	clone = netdev->nic_cfg->other_cfg;
+	clone->ring = *ring;
+	clone->kring = *kernel_ring;
+	netdev_nic_recfg_prep(netdev);
 
 	fbnic_down_noidle(fbn);
 	err = fbnic_wait_all_queues_idle(fbn->fbd, true);
@@ -701,13 +697,11 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 	/* nothing can fail past this point */
 	fbnic_flush(fbn);
 
-	fbnic_rplc_swap_rings(fbn);
-	fbnic_clone_swap_cfg(fbn, clone);
+	fbnic_rplc_swap_rings(fbn, clone);
+	netdev_nic_recfg_swap(netdev);
 
 	fbnic_up(fbn);
-
-	fbnic_rplc_free_rings(fbn);
-	fbnic_clone_free(clone);
+	netdev_nic_recfg_end(netdev);
 
 	return 0;
 
@@ -715,9 +709,7 @@ err_start_stack:
 	/* TBD: enable does reset - can we just renable ?? asking @jhas */
 	fbnic_flush(fbn);
 	fbnic_up(fbn);
-	fbnic_rplc_free_rings(fbn);
-err_free_clone:
-	fbnic_clone_free(clone);
+	netdev_nic_recfg_end(netdev);
 	return err;
 }
 
