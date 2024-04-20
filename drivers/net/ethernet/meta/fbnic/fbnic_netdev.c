@@ -28,26 +28,29 @@ MODULE_PARM_DESC(mac_fallback, "Generate new MAC address if DSN is invalid");
 
 int __fbnic_open(struct fbnic_net *fbn)
 {
+	struct net_device *netdev = fbn->netdev;
 	struct fbnic_dev *fbd = fbn->fbd;
 	int err;
 
-	err = fbnic_alloc_napi_vectors(fbn);
+	err = netif_set_real_num_tx_queues(netdev, fbn->num_tx_queues);
 	if (err)
 		return err;
+
+	err = netif_set_real_num_rx_queues(netdev, fbn->num_rx_queues);
+	if (err)
+		return err;
+
+	err = netdev_nic_cfg_start(netdev);
+	if (err)
+		return err;
+
+	err = fbnic_alloc_napi_vectors(fbn);
+	if (err)
+		goto free_netdev_nic_cfg;
 
 	err = fbnic_alloc_resources(fbn);
 	if (err)
 		goto free_napi_vectors;
-
-	err = netif_set_real_num_tx_queues(fbn->netdev,
-					   fbn->num_tx_queues);
-	if (err)
-		goto free_resources;
-
-	err = netif_set_real_num_rx_queues(fbn->netdev,
-					   fbn->num_rx_queues);
-	if (err)
-		goto free_resources;
 
 	/* Send ownership message and flush to verify FW has seen it */
 	err = fbnic_fw_xmit_ownership_msg(fbd, true);
@@ -83,6 +86,8 @@ free_resources:
 	fbnic_free_resources(fbn);
 free_napi_vectors:
 	fbnic_free_napi_vectors(fbn);
+free_netdev_nic_cfg:
+	netdev_nic_cfg_stop(netdev);
 	return err;
 }
 
@@ -109,6 +114,8 @@ static int fbnic_stop(struct net_device *netdev)
 
 	fbnic_free_resources(fbn);
 	fbnic_free_napi_vectors(fbn);
+
+	netdev_nic_cfg_stop(netdev);
 
 	fbnic_fw_xmit_ownership_msg(fbn->fbd, false);
 
