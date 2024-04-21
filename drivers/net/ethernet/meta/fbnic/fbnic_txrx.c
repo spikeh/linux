@@ -594,7 +594,7 @@ fbnic_features_check(struct sk_buff *skb, struct net_device *dev,
 	return fbnic_features_check_encap_gso(skb, dev, features, l3len);
 }
 
-static void fbnic_clean_twq0(struct fbnic_napi_vector *nv, int napi_budget,
+void fbnic_clean_twq0(struct fbnic_napi_vector *nv, int napi_budget,
 			     struct fbnic_ring *ring, bool discard,
 			     unsigned int hw_head)
 {
@@ -778,7 +778,7 @@ static void fbnic_xdp_free_page(struct fbnic_napi_vector *nv,
 		page_pool_put_unrefed_page(nv->page_pool, page, -1, !!budget);
 }
 
-static void fbnic_clean_twq1(struct fbnic_napi_vector *nv, int napi_budget,
+void fbnic_clean_twq1(struct fbnic_napi_vector *nv, int napi_budget,
 			     struct fbnic_ring *ring, bool discard,
 			     unsigned int hw_head)
 {
@@ -1086,7 +1086,7 @@ static void fbnic_add_rx_frag(struct fbnic_napi_vector *nv, u64 rcd,
 	xdp->data_len += len;
 }
 
-static void fbnic_put_xdp_buff(struct fbnic_napi_vector *nv,
+void fbnic_put_xdp_buff(struct fbnic_napi_vector *nv,
 			       struct fbnic_xdp_buff *xdp, int budget)
 {
 	struct skb_shared_info *shinfo;
@@ -1439,7 +1439,7 @@ static int fbnic_clean_rcq(struct fbnic_napi_vector *nv,
 	return packets;
 }
 
-static void fbnic_nv_irq_disable(struct fbnic_napi_vector *nv)
+void fbnic_nv_irq_disable(struct fbnic_napi_vector *nv)
 {
 	struct fbnic_dev *fbd = nv->fbd;
 	u32 v_idx = nv->v_idx;
@@ -2240,7 +2240,7 @@ free_resources:
 	return err;
 }
 
-static void fbnic_disable_twq0(struct fbnic_ring *txr)
+void fbnic_disable_twq0(struct fbnic_ring *txr)
 {
 	u32 twq_ctl = fbnic_ring_rd32(txr, FBNIC_QUEUE_TWQ0_CTL);
 
@@ -2249,7 +2249,7 @@ static void fbnic_disable_twq0(struct fbnic_ring *txr)
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TWQ0_CTL, twq_ctl);
 }
 
-static void fbnic_disable_twq1(struct fbnic_ring *txr)
+void fbnic_disable_twq1(struct fbnic_ring *txr)
 {
 	u32 twq_ctl = fbnic_ring_rd32(txr, FBNIC_QUEUE_TWQ1_CTL);
 
@@ -2258,13 +2258,13 @@ static void fbnic_disable_twq1(struct fbnic_ring *txr)
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TWQ1_CTL, twq_ctl);
 }
 
-static void fbnic_disable_tcq(struct fbnic_ring *txr)
+void fbnic_disable_tcq(struct fbnic_ring *txr)
 {
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TCQ_CTL, 0);
 	fbnic_ring_wr32(txr, FBNIC_QUEUE_TIM_MASK, FBNIC_QUEUE_TIM_MASK_MASK);
 }
 
-static void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
+void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
 {
 	u32 bdq_ctl = fbnic_ring_rd32(hpq, FBNIC_QUEUE_BDQ_CTL);
 
@@ -2273,7 +2273,7 @@ static void fbnic_disable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
 	fbnic_ring_wr32(hpq, FBNIC_QUEUE_BDQ_CTL, bdq_ctl);
 }
 
-static void fbnic_disable_rcq(struct fbnic_ring *rxr)
+void fbnic_disable_rcq(struct fbnic_ring *rxr)
 {
 	fbnic_ring_wr32(rxr, FBNIC_QUEUE_RCQ_CTL, 0);
 	fbnic_ring_wr32(rxr, FBNIC_QUEUE_RIM_MASK, FBNIC_QUEUE_RIM_MASK_MASK);
@@ -2349,12 +2349,6 @@ static void fbnic_tx_flush_off(struct fbnic_dev *fbd)
 {
 	fbnic_rmw32(fbd, FBNIC_TMI_DROP_CTRL, FBNIC_TMI_DROP_CTRL_EN, 0);
 }
-
-struct fbnic_idle_regs {
-	u32 reg_base;
-	u8 reg_fpga_cnt;
-	u8 reg_asic_cnt;
-};
 
 static bool fbnic_all_idle(struct fbnic_dev *fbd,
 			   const struct fbnic_idle_regs *regs,
@@ -2505,7 +2499,7 @@ void fbnic_fill(struct fbnic_net *fbn)
 	}
 }
 
-static void fbnic_enable_twq0(struct fbnic_ring *twq)
+void fbnic_enable_twq0(struct fbnic_ring *twq)
 {
 	u32 log_size = fls(twq->size_mask);
 
@@ -2527,7 +2521,7 @@ static void fbnic_enable_twq0(struct fbnic_ring *twq)
 	fbnic_ring_wr32(twq, FBNIC_QUEUE_TWQ0_CTL, FBNIC_QUEUE_TWQ_CTL_ENABLE);
 }
 
-static void fbnic_enable_twq1(struct fbnic_ring *twq)
+void fbnic_enable_twq1(struct fbnic_ring *twq)
 {
 	u32 log_size = fls(twq->size_mask);
 
@@ -2549,7 +2543,7 @@ static void fbnic_enable_twq1(struct fbnic_ring *twq)
 	fbnic_ring_wr32(twq, FBNIC_QUEUE_TWQ1_CTL, FBNIC_QUEUE_TWQ_CTL_ENABLE);
 }
 
-static void fbnic_enable_tcq(struct fbnic_napi_vector *nv,
+void fbnic_enable_tcq(struct fbnic_napi_vector *nv,
 			     struct fbnic_ring *tcq)
 {
 	u32 log_size = fls(tcq->size_mask);
@@ -2583,7 +2577,7 @@ static void fbnic_enable_tcq(struct fbnic_napi_vector *nv,
 	fbnic_ring_wr32(tcq, FBNIC_QUEUE_TCQ_CTL, FBNIC_QUEUE_TCQ_CTL_ENABLE);
 }
 
-static void fbnic_enable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
+void fbnic_enable_bdq(struct fbnic_ring *hpq, struct fbnic_ring *ppq)
 {
 	u32 bdq_ctl = FBNIC_QUEUE_BDQ_CTL_ENABLE;
 	u32 log_size;
@@ -2621,7 +2615,7 @@ write_ctl:
 	fbnic_ring_wr32(hpq, FBNIC_QUEUE_BDQ_CTL, bdq_ctl);
 }
 
-static void fbnic_config_drop_mode_rcq(struct fbnic_napi_vector *nv,
+void fbnic_config_drop_mode_rcq(struct fbnic_napi_vector *nv,
 				       struct fbnic_ring *rcq)
 {
 	struct fbnic_net *fbn = netdev_priv(nv->napi.dev);
@@ -2655,7 +2649,7 @@ void fbnic_config_drop_mode(struct fbnic_net *fbn)
 	}
 }
 
-static void fbnic_enable_rcq(struct fbnic_napi_vector *nv,
+void fbnic_enable_rcq(struct fbnic_napi_vector *nv,
 			     struct fbnic_ring *rcq)
 {
 	u32 log_size = fls(rcq->size_mask);
@@ -2731,7 +2725,7 @@ void fbnic_enable(struct fbnic_net *fbn)
 	wrfl();
 }
 
-static void fbnic_nv_irq_enable(struct fbnic_napi_vector *nv)
+void fbnic_nv_irq_enable(struct fbnic_napi_vector *nv)
 {
 	struct fbnic_net *fbn = netdev_priv(nv->napi.dev);
 	struct fbnic_dev *fbd = nv->fbd;
