@@ -609,21 +609,10 @@ static void fbnic_aggregate_vector_counters(struct fbnic_net *fbn,
 static void fbnic_clone_swap(struct fbnic_net *orig,
 			     struct fbnic_net *clone)
 {
-	struct msix_entry *msix_entries = orig->fbd->msix_entries;
 	struct fbnic_napi_vector *nv;
 	unsigned int i;
 
 	fbnic_clone_swap_cfg(orig, clone);
-
-	list_for_each_entry(nv, &clone->napis, napis) {
-		set_bit(NAPI_STATE_DRV0, &nv->napi.state);
-		synchronize_irq(msix_entries[nv->v_idx].vector);
-	}
-	list_for_each_entry(nv, &orig->napis, napis) {
-		clear_bit(NAPI_STATE_DRV0, &nv->napi.state);
-		synchronize_irq(msix_entries[nv->v_idx].vector);
-		fbnic_aggregate_vector_counters(orig, nv);
-	}
 
 	list_swap(&clone->napis, &orig->napis);
 	for (i = 0; i < ARRAY_SIZE(orig->tx); i++)
@@ -1267,7 +1256,7 @@ static int fbnic_set_channels(struct net_device *netdev,
 	unsigned int max_napis, standalone;
 	struct fbnic_dev *fbd = fbn->fbd;
 	struct fbnic_net *clone;
-	int err;
+	int i, err;
 
 	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
 	standalone = ch->rx_count + ch->tx_count;
@@ -1298,36 +1287,42 @@ static int fbnic_set_channels(struct net_device *netdev,
 	memset(clone->tx, 0, sizeof(clone->tx));
 	memset(clone->rx, 0, sizeof(clone->rx));
 
-	err = fbnic_alloc_napi_vectors(clone);
+	err = netdev_nic_recfg_start(netdev);
 	if (err)
 		goto err_free_clone;
+	netdev->nic_cfg->other_cfg->txq_cnt = clone->num_tx_queues;
+	netdev->nic_cfg->other_cfg->rxq_cnt = clone->num_rx_queues;
+	memcpy(&netdev->nic_cfg->other_cfg->cfg.chan, ch, sizeof(*ch));
+
+	err = netdev_nic_recfg_prep(netdev);
+	if (err)
+		goto err_free_recfg;
+
+	err = fbnic_alloc_napi_vectors(clone);
+	if (err)
+		goto err_free_recfg;
 
 	err = fbnic_alloc_resources(clone);
 	if (err)
 		goto err_free_napis;
 
-	fbnic_down_noidle(fbn);
-	err = fbnic_wait_all_queues_idle(fbn->fbd, true);
-	if (err)
-		goto err_start_stack;
+	for (i = 0; i < max(fbn->num_tx_queues, clone->num_tx_queues); i++)
+		netdev_nic_cfg_restart_txq(netdev, i);
+
+	for (i = 0; i < max(fbn->num_tx_queues, clone->num_rx_queues); i++)
+		netdev_nic_cfg_restart_rxq(netdev, i);
 
 	err = netif_set_real_num_queues(netdev, clone->num_tx_queues,
 					clone->num_rx_queues);
 	if (err)
 		goto err_start_stack;
 
-	/* nothing can fail past this point */
-	fbnic_flush(fbn);
-
 	fbnic_clone_swap(fbn, clone);
-
-	/* reset RSS indirection table */
-	fbnic_reset_indir_tbl(fbn);
-
-	fbnic_up(fbn);
+	netdev_nic_recfg_swap(netdev);
 
 	fbnic_free_resources(clone);
 	fbnic_free_napi_vectors(clone);
+	netdev_nic_recfg_end(netdev);
 	fbnic_clone_free(clone);
 
 	return 0;
@@ -1339,6 +1334,8 @@ err_start_stack:
 	fbnic_free_resources(clone);
 err_free_napis:
 	fbnic_free_napi_vectors(clone);
+err_free_recfg:
+	netdev_nic_recfg_end(netdev);
 err_free_clone:
 	fbnic_clone_free(clone);
 	return err;
