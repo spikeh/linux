@@ -1454,6 +1454,10 @@ static int __dev_open(struct net_device *dev, struct netlink_ext_ack *extack)
 	if (ops->ndo_validate_addr)
 		ret = ops->ndo_validate_addr(dev);
 
+	// if driver have some flag to say it supports
+	// netdev core allocations:
+	// netdev_nic_cfg_start(dev);
+
 	if (!ret && ops->ndo_open)
 		ret = ops->ndo_open(dev);
 
@@ -1540,6 +1544,8 @@ static void __dev_close_many(struct list_head *head)
 		 */
 		if (ops->ndo_stop)
 			ops->ndo_stop(dev);
+
+		// netdev_nic_cfg_stop(dev);
 
 		dev->flags &= ~IFF_UP;
 		netpoll_poll_enable(dev);

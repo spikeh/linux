@@ -765,6 +765,8 @@ static int fbnic_tx_queue_start(struct net_device *dev,
 	int i;
 	u32 irqs[FBNIC_MAX_MSIX_VECS / 32] = {};
 
+	printk("----- tx_queue_start: idx=%d, qmem=%px, nv=%px, napi_struct=%px\n", idx, qmem, nv, &nv->napi);
+
 	nv = txq_mem->nv;
 	nv->tx_dim.state = DIM_START_MEASURE;
 
@@ -876,6 +878,8 @@ static bool fbnic_wait_tx_queue_idle(struct fbnic_dev *fbd, unsigned int idx)
 	bool idle;
 	int err;
 
+	printk("----- wait_tx_queue_idle: idx=%d\n", idx);
+
 	err = read_poll_timeout_atomic(fbnic_tx_queue_idle, idle, idle, 2,  500000,
 				       false, fbd, tx, ARRAY_SIZE(tx), idx);
 	if (err == -ETIMEDOUT) {
@@ -899,6 +903,8 @@ static bool fbnic_wait_rx_queue_idle(struct fbnic_dev *fbd, unsigned int idx)
 	bool idle;
 	int err;
 
+	printk("----- wait_rx_queue_idle: idx=%d\n", idx);
+
 	err = read_poll_timeout_atomic(fbnic_rx_queue_idle, idle, idle, 2,  500000,
 				       false, fbd, rx, ARRAY_SIZE(rx), idx);
 
@@ -916,6 +922,8 @@ static int fbnic_tx_queue_stop(struct net_device *dev,
 	struct fbnic_q_triad *qt;
 	struct netdev_queue *txq;
 	int cpu;
+
+	printk("----- tx_queue_stop: idx=%d, qmem=%px, nv=%px, napi_struct=%px\n", idx, qmem, nv, &nv->napi);
 
 	nv = txq_mem->nv;
 	napi_disable(&nv->napi);
@@ -1120,6 +1128,8 @@ static int fbnic_rx_queue_start(struct net_device *dev,
 	int i;
 	u32 irqs[FBNIC_MAX_MSIX_VECS / 32] = {};
 
+	printk("----- rx_queue_start: idx=%d, qmem=%px\n", idx, qmem);
+
 	/* already started by paired tx queue */
 	if (rxq_mem->type == FBNIC_NV_TYPE_COMBINED)
 		return 0;
@@ -1162,6 +1172,8 @@ static int fbnic_rx_queue_stop(struct net_device *dev,
 	struct fbnic_napi_vector *nv;
 	struct netdev_rx_queue *rxq;
 	struct fbnic_q_triad *qt;
+
+	printk("----- rx_queue_stop: idx=%d, qmem=%px\n", idx, qmem);
 
 	/* already stopped by paired tx queue */
 	if (rxq_mem->type == FBNIC_NV_TYPE_COMBINED)

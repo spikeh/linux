@@ -261,7 +261,7 @@ enum {
 #define FBNIC_QM_TCQ_CTL0_TICK_CYCLES		CSR_GENMASK(26, 16)
 #define FBNIC_QM_TQS_IDLE(n)		(0x00830 + (n)) /* 0x020c0 + 0x4*n */
 #define FBNIC_QM_TQS_IDLE_FPGA_CNT		4
-#define FBNIC_QM_TQS_IDLE_ASIC_CNT		4
+#define FBNIC_QM_TQS_IDLE_ASIC_CNT		8
 #define FBNIC_QM_TQS_EDT_TS_RANGE	0x00849		/* 0x2124 */
 /* TDB: waiting for update, it overlaps TDE and TNI regs with current map */
 #define FBNIC_QM_TDE_IDLE(n)		(0x00853 + (n)) /* 0x0214c + 0x4*n */

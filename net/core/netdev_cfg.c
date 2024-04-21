@@ -196,6 +196,7 @@ int netdev_nic_cfg_start(struct net_device *dev)
 
 	nic->txq_cnt = dev->real_num_tx_queues;
 	nic->rxq_cnt = dev->real_num_rx_queues;
+	printk("----- netdev_nic_cfg_start: txq=%d, rxq=%d\n", nic->txq_cnt, nic->rxq_cnt);
 
 	err = netdev_nic_cfg_txqmem_alloc(dev, nic);
 	if (err)
@@ -231,15 +232,18 @@ void netdev_nic_cfg_restart_txq(struct net_device *dev, unsigned int qid)
 	void *qmem;
 
 	WARN_ON(!nic->recfg);
+	printk("----- restart_txq: id=%d\n", qid);
 
 	if (qid < nic->txq_cnt) {
 		qmem = netdev_nic_cfg_txqmem(dev, nic, qid);
+		printk("----- restart_txq: stopping old queue=%d\n", qid);
 		dev->netdev_ops->ndo_tx_queue_stop(dev, qmem, qid);
 	}
 
 	nic = nic->other_cfg;
 	if (qid < nic->txq_cnt) {
 		qmem = netdev_nic_cfg_txqmem(dev, nic, qid);
+		printk("----- restart_txq: starting new queue=%d\n", qid);
 		dev->netdev_ops->ndo_tx_queue_start(dev, qmem, qid);
 	}
 }
@@ -251,15 +255,18 @@ void netdev_nic_cfg_restart_rxq(struct net_device *dev, unsigned int qid)
 	void *qmem;
 
 	WARN_ON(!nic->recfg);
+	printk("----- restart_rxq: id=%d\n", qid);
 
 	if (qid < nic->rxq_cnt) {
 		qmem = netdev_nic_cfg_rxqmem(dev, nic, qid);
+		printk("----- restart_rxq: stopping old queue=%d\n", qid);
 		dev->netdev_ops->ndo_rx_queue_stop(dev, qmem, qid);
 	}
 
 	nic = nic->other_cfg;
 	if (qid < nic->rxq_cnt) {
 		qmem = netdev_nic_cfg_rxqmem(dev, nic, qid);
+		printk("----- restart_rxq: starting new queue=%d\n", qid);
 		dev->netdev_ops->ndo_rx_queue_start(dev, qmem, qid);
 	}
 }
@@ -317,6 +324,8 @@ int netdev_nic_recfg_prep(struct net_device *dev)
 		nic->txq_cnt = dev->real_num_tx_queues;
 	if (!nic->rxq_cnt)
 		nic->rxq_cnt = dev->real_num_rx_queues;
+
+	printk("----- netdev_nic_recfg_prep: txq=%d, rxq=%d\n", nic->txq_cnt, nic->rxq_cnt);
 
 	err = netdev_nic_cfg_txqmem_alloc(dev, nic);
 	if (err)

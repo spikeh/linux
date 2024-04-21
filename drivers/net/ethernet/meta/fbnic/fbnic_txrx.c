@@ -1831,6 +1831,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 	else
 		nv->type = FBNIC_NV_TYPE_RX_ONLY;
 
+	printk("----- alloc_nv: nv=%px, v_idx=%d, type=%d, txt_cnt=%d, rxt_cnt=%d, napi_struct=%px\n", nv, v_idx, nv->type, txt_count, rxt_count, &nv->napi);
+
 	/* record queue triad counts */
 	nv->txt_count = txt_count;
 	nv->rxt_count = rxt_count;
@@ -1915,6 +1917,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 		txt_count--;
 		txq_idx += v_count;
 
+		printk("----- alloc_nv: tx qt done, sub0=%d, sub1=%d, cmpl=%d\n", (bool)(qt->sub0.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->sub1.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->cmpl.flags | FBNIC_RING_F_DISABLED == 0));
+
 		/* move to next queue triad */
 		qt++;
 	}
@@ -1940,6 +1944,8 @@ static int fbnic_alloc_napi_vector(struct fbnic_dev *fbd, struct fbnic_net *fbn,
 		rxt_count--;
 		rxq_idx += v_count;
 
+		printk("----- alloc_nv: rx qt done, sub0=%d, sub1=%d, cmpl=%d\n", (bool)(qt->sub0.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->sub1.flags | FBNIC_RING_F_DISABLED == 0), (bool)(qt->cmpl.flags | FBNIC_RING_F_DISABLED == 0));
+
 		/* move to next queue triad */
 		qt++;
 	}
@@ -1963,6 +1969,7 @@ int fbnic_alloc_napi_vectors(struct fbnic_net *fbn)
 	int err;
 
 	/* Allocate 1 Tx queue per napi vector */
+	printk("----- alloc_napi_vectors: num_tx=%d, num_rx=%d, num_napi=%d\n", num_tx, num_rx, num_napi);
 	if (num_napi < FBNIC_MAX_TXQS && num_napi == num_tx + num_rx) {
 		while (num_tx) {
 			err = fbnic_alloc_napi_vector(fbd, fbn,
@@ -2147,9 +2154,12 @@ static int fbnic_alloc_nv_resources(struct net_device *netdev,
 	struct fbnic_rxq_mem *rxqmem;
 	int err;
 
+	printk("----- alloc_nv_resources: nv=%px, type=%d\n", nv, nv->type);
 	if (nv->type == FBNIC_NV_TYPE_COMBINED) {
 		txqmem = netdev_nic_cfg_txqmem(netdev, nic, nic->txq_idx++);
 		rxqmem = netdev_nic_cfg_rxqmem(netdev, nic, nic->rxq_idx++);
+
+		printk("----- alloc_nv_resources: moving from txqmem=%px into nv->qt[0]\n", txqmem);
 
 		fbnic_copy_qt_resources(&nv->qt[0], &txqmem->qt);
 
@@ -2159,6 +2169,8 @@ static int fbnic_alloc_nv_resources(struct net_device *netdev,
 						 rxqmem->page_pool);
 		if (err)
 			return err;
+
+		printk("----- alloc_nv_resources: moving from rxqmem=%px into nv->qt[1], rxqmem->page_pool=%px\n", rxqmem, rxqmem->page_pool);
 
 		fbnic_copy_qt_resources(&nv->qt[1], &rxqmem->qt);
 		nv->page_pool = rxqmem->page_pool;
@@ -2174,6 +2186,7 @@ static int fbnic_alloc_nv_resources(struct net_device *netdev,
 	} else if (nv->type == FBNIC_NV_TYPE_TX_ONLY) {
 		txqmem = netdev_nic_cfg_txqmem(netdev, nic, nic->txq_idx++);
 
+		printk("----- alloc_nv_resources: moving from txqmem=%px into nv->qt[0]\n", txqmem);
 
 		fbnic_copy_qt_resources(&nv->qt[0], &txqmem->qt);
 
@@ -2186,6 +2199,8 @@ static int fbnic_alloc_nv_resources(struct net_device *netdev,
 	} else {
 		rxqmem = netdev_nic_cfg_rxqmem(netdev, nic, nic->rxq_idx++);
 
+		printk("----- alloc_nv_resources: moving from rxqmem->xdp_qt into nv->qt[0], xdp_qt->sub0.desc=%px, xdp_qt->sub1.desc=%px, xdp_qt->cmpl.desc=%px\n", rxqmem, rxqmem->xdp_qt.sub0.desc, rxqmem->xdp_qt.sub1.desc, rxqmem->xdp_qt.cmpl.desc);
+
 		fbnic_copy_qt_resources(&nv->qt[0], &rxqmem->xdp_qt);
 
 		/* TODO: error handling */
@@ -2194,6 +2209,8 @@ static int fbnic_alloc_nv_resources(struct net_device *netdev,
 						 rxqmem->page_pool);
 		if (err)
 			return err;
+
+		printk("----- alloc_nv_resources: moving from rxqmem=%px into nv->qt[1], rxqmem->page_pool=%px\n", rxqmem, rxqmem->page_pool);
 
 		fbnic_copy_qt_resources(&nv->qt[1], &rxqmem->qt);
 		nv->page_pool = rxqmem->page_pool;
