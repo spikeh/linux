@@ -1802,10 +1802,25 @@ static inline void skb_zcopy_downgrade_managed(struct sk_buff *skb)
 		__skb_zcopy_downgrade_managed(skb);
 }
 
+/* Returns true if the skb_frag contains a net_iov. */
+static inline bool skb_frag_is_net_iov(const skb_frag_t *frag)
+{
+	return netmem_is_net_iov(frag->netmem);
+}
+
 /* Return true if frags in this skb are readable by the host. */
 static inline bool skb_frags_readable(const struct sk_buff *skb)
 {
-	return !skb->unreadable;
+	int i;
+
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+		const skb_frag_t *f = &skb_shinfo(skb)->frags[i];
+
+		if (skb_frag_is_net_iov(f))
+			return false;
+	}
+	return true;
+	/* return !skb->unreadable; */
 }
 
 static inline void skb_mark_not_on_list(struct sk_buff *skb)
@@ -3494,12 +3509,6 @@ static inline void skb_frag_off_copy(skb_frag_t *fragto,
 				     const skb_frag_t *fragfrom)
 {
 	fragto->offset = fragfrom->offset;
-}
-
-/* Returns true if the skb_frag contains a net_iov. */
-static inline bool skb_frag_is_net_iov(const skb_frag_t *frag)
-{
-	return netmem_is_net_iov(frag->netmem);
 }
 
 /**
