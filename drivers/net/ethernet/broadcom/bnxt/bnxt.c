@@ -14855,6 +14855,258 @@ static const struct netdev_stat_ops bnxt_stat_ops = {
 	.get_base_stats		= bnxt_get_base_stats,
 };
 
+static int __bnxt_alloc_rx_desc_ring(struct pci_dev *pdev, struct bnxt_ring_mem_info *rmem)
+{
+	int i, rc;
+
+	for (i = 0; i < rmem->nr_pages; i++) {
+		rmem->pg_arr[i] = dma_alloc_coherent(&pdev->dev,
+						     rmem->page_size,
+						     &rmem->dma_arr[i],
+						     GFP_KERNEL);
+		if (!rmem->pg_arr[i]) {
+			rc = -ENOMEM;
+			goto err_free;
+		}
+	}
+
+	return 0;
+
+err_free:
+	while (i--) {
+		dma_free_coherent(&pdev->dev, rmem->page_size,
+				  rmem->pg_arr[i], rmem->dma_arr[i]);
+		rmem->pg_arr[i] = NULL;
+	}
+	return rc;
+}
+
+static int bnxt_alloc_rx_ring_struct(struct bnxt *bp, struct bnxt_ring_struct *ring)
+{
+	struct bnxt_ring_mem_info *rmem;
+	int rc;
+
+	rmem = &ring->ring_mem;
+	rc = __bnxt_alloc_rx_desc_ring(bp->pdev, rmem);
+	if (rc)
+		return rc;
+
+	*rmem->vmem = vzalloc(rmem->vmem_size);
+	if (!(*rmem->vmem)) {
+		rc = -ENOMEM;
+		goto err_free;
+	}
+
+	return 0;
+
+err_free:
+	bnxt_free_ring(bp, rmem);
+	return rc;
+}
+
+static int bnxt_alloc_rx_agg_bmap(struct bnxt *bp, struct bnxt_rx_ring_info *rxr)
+{
+	u16 mem_size;
+
+	rxr->rx_agg_bmap_size = bp->rx_agg_ring_mask + 1;
+	mem_size = rxr->rx_agg_bmap_size / 8;
+	rxr->rx_agg_bmap = kzalloc(mem_size, GFP_KERNEL);
+	if (!rxr->rx_agg_bmap)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static void bnxt_init_rx_ring_rxbd_pages(struct bnxt *bp, struct bnxt_rx_ring_info *rxr)
+{
+	struct bnxt_ring_struct *ring;
+	u32 type;
+
+	type = (bp->rx_buf_use_size << RX_BD_LEN_SHIFT) |
+		RX_BD_TYPE_RX_PACKET_BD | RX_BD_FLAGS_EOP;
+
+	if (NET_IP_ALIGN == 2)
+		type |= RX_BD_FLAGS_SOP;
+
+	ring = &rxr->rx_ring_struct;
+	ring->fw_ring_id = INVALID_HW_RING_ID;
+	bnxt_init_rxbd_pages(ring, type);
+
+	ring = &rxr->rx_agg_ring_struct;
+	ring->fw_ring_id = INVALID_HW_RING_ID;
+	if ((bp->flags & BNXT_FLAG_AGG_RINGS)) {
+		type = ((u32)BNXT_RX_PAGE_SIZE << RX_BD_LEN_SHIFT) |
+			RX_BD_TYPE_RX_AGG_BD | RX_BD_FLAGS_SOP;
+
+		bnxt_init_rxbd_pages(ring, type);
+	}
+}
+
+static void *bnxt_queue_mem_alloc(struct net_device *dev, int idx)
+{
+	struct bnxt_rx_ring_info *rxr, *clone;
+	struct bnxt *bp = netdev_priv(dev);
+	int rc;
+
+	rxr = &bp->rx_ring[idx];
+	clone = kmemdup(rxr, sizeof(*rxr), GFP_KERNEL);
+	if (!clone)
+		return ERR_PTR(-ENOMEM);
+
+	clone->rx_prod = 0;
+	clone->rx_agg_prod = 0;
+	clone->rx_sw_agg_prod = 0;
+	clone->rx_next_cons = 0;
+
+	__bnxt_init_rx_ring_struct(bp, clone);
+
+	rc = bnxt_alloc_rx_page_pool(bp, clone, rxr->page_pool->p.nid);
+	if (rc)
+		goto err_free_clone;
+
+	rc = bnxt_alloc_rx_ring_struct(bp, &clone->rx_ring_struct);
+	if (rc)
+		goto err_free_page_pool;
+
+	if (bp->flags & BNXT_FLAG_AGG_RINGS) {
+		rc = bnxt_alloc_rx_ring_struct(bp, &clone->rx_agg_ring_struct);
+		if (rc)
+			goto err_free_rx_ring;
+
+		rc = bnxt_alloc_rx_agg_bmap(bp, clone);
+		if (rc)
+			goto err_free_rx_agg_ring;
+	}
+
+	if (bp->flags & BNXT_FLAG_TPA) {
+		rc = __bnxt_alloc_one_tpa_info(bp, clone);
+		if (rc)
+			goto err_free_rx_agg_bmap;
+	}
+
+	bnxt_init_rx_ring_rxbd_pages(bp, clone);
+	bnxt_alloc_one_rx_ring(bp, clone);
+
+	rxr->rplc = clone;
+
+	return clone;
+
+err_free_rx_agg_bmap:
+	kfree(clone->rx_agg_bmap);
+err_free_rx_agg_ring:
+	bnxt_free_ring(bp, &clone->rx_agg_ring_struct.ring_mem);
+err_free_rx_ring:
+	bnxt_free_ring(bp, &clone->rx_ring_struct.ring_mem);
+err_free_page_pool:
+	page_pool_destroy(clone->page_pool);
+	rxr->page_pool = NULL;
+err_free_clone:
+	kfree(clone);
+
+	return ERR_PTR(rc);
+}
+
+static void bnxt_queue_mem_free(struct net_device *dev, void *qmem)
+{
+	struct bnxt_rx_ring_info *rxr = qmem;
+	struct bnxt *bp = netdev_priv(dev);
+	struct bnxt_ring_struct *ring;
+
+	bnxt_free_tpa_info(bp, rxr);
+
+	page_pool_destroy(rxr->page_pool);
+	rxr->page_pool = NULL;
+
+	kfree(rxr->rx_agg_bmap);
+	rxr->rx_agg_bmap = NULL;
+
+	ring = &rxr->rx_ring_struct;
+	bnxt_free_ring(bp, &ring->ring_mem);
+
+	ring = &rxr->rx_agg_ring_struct;
+	bnxt_free_ring(bp, &ring->ring_mem);
+
+	kfree(rxr);
+}
+
+static int bnxt_queue_start(struct net_device *dev, int idx, void *qmem)
+{
+	struct bnxt_rx_ring_info *rxr = qmem;
+	struct bnxt *bp = netdev_priv(dev);
+
+	if (bp->flags & BNXT_FLAG_AGG_RINGS)
+		bnxt_db_write(bp, &rxr->rx_agg_db, rxr->rx_agg_prod);
+	bnxt_db_write(bp, &rxr->rx_db, rxr->rx_prod);
+
+	if (bp->flags & BNXT_FLAG_TPA)
+		bnxt_set_tpa(bp, true);
+
+	return 0;
+}
+
+static int bnxt_queue_stop(struct net_device *dev, int idx, void **out_qmem)
+{
+	struct bnxt_rx_ring_info *orig, *rplc;
+	struct bnxt *bp = netdev_priv(dev);
+	struct bnxt_ring_mem_info *rmem;
+	struct bnxt_cp_ring_info *cpr;
+	int i, rc;
+
+	rc = bnxt_hwrm_rx_ring_reset(bp, idx);
+	if (rc)
+		return rc;
+
+	/* HW ring is registered w/ the original bnxt_rx_ring_info so we cannot
+	 * do a direct swap between orig and rplc. Instead, swap the
+	 * dynamically allocated queue memory and then update pg_tbl.
+	 */
+	orig = &bp->rx_ring[idx];
+	rplc = orig->rplc;
+
+	swap(orig->rx_prod, rplc->rx_prod);
+	swap(orig->rx_agg_prod, rplc->rx_agg_prod);
+	swap(orig->rx_sw_agg_prod, rplc->rx_sw_agg_prod);
+	swap(orig->rx_next_cons, rplc->rx_next_cons);
+
+	for (i = 0; i < MAX_RX_PAGES; i++) {
+		swap(orig->rx_desc_ring[i], rplc->rx_desc_ring[i]);
+		swap(orig->rx_desc_mapping[i], rplc->rx_desc_mapping[i]);
+
+		swap(orig->rx_agg_desc_ring[i], rplc->rx_agg_desc_ring[i]);
+		swap(orig->rx_agg_desc_mapping[i], rplc->rx_agg_desc_mapping[i]);
+	}
+	swap(orig->rx_buf_ring, rplc->rx_buf_ring);
+	swap(orig->rx_agg_ring, rplc->rx_agg_ring);
+	swap(orig->rx_agg_bmap, rplc->rx_agg_bmap);
+	swap(orig->rx_agg_bmap_size, rplc->rx_agg_bmap_size);
+	swap(orig->rx_tpa, rplc->rx_tpa);
+	swap(orig->rx_tpa_idx_map, rplc->rx_tpa_idx_map);
+	swap(orig->page_pool, rplc->page_pool);
+
+	rmem = &orig->rx_ring_struct.ring_mem;
+	for (i = 0; i < rmem->nr_pages; i++)
+		rmem->pg_tbl[i] = cpu_to_le64(rmem->dma_arr[i]);
+
+	rmem = &rplc->rx_ring_struct.ring_mem;
+	for (i = 0; i < rmem->nr_pages; i++)
+		rmem->pg_tbl[i] = cpu_to_le64(rmem->dma_arr[i]);
+
+	cpr = &orig->bnapi->cp_ring;
+	cpr->sw_stats->rx.rx_resets++;
+
+	*out_qmem = rplc;
+	orig->rplc = NULL;
+
+	return 0;
+}
+
+static const struct netdev_queue_mgmt_ops bnxt_queue_mgmt_ops = {
+	.ndo_queue_mem_alloc	= bnxt_queue_mem_alloc,
+	.ndo_queue_mem_free	= bnxt_queue_mem_free,
+	.ndo_queue_start	= bnxt_queue_start,
+	.ndo_queue_stop		= bnxt_queue_stop,
+};
+
 static void bnxt_remove_one(struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
@@ -15320,6 +15572,7 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	dev->stat_ops = &bnxt_stat_ops;
 	dev->watchdog_timeo = BNXT_TX_TIMEOUT;
 	dev->ethtool_ops = &bnxt_ethtool_ops;
+	dev->queue_mgmt_ops = &bnxt_queue_mgmt_ops;
 	pci_set_drvdata(pdev, dev);
 
 	rc = bnxt_alloc_hwrm_resources(bp);
