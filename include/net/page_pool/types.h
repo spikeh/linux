@@ -135,6 +135,11 @@ struct memory_provider_ops {
 	bool (*release_page)(struct page_pool *pool, struct page *page);
 };
 
+struct pp_memory_provider_params {
+	const struct memory_provider_ops *mp_ops;
+	void *mp_priv;
+};
+
 struct page_pool {
 	struct page_pool_params_fast p;
 
