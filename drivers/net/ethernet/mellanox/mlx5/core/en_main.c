@@ -4014,8 +4014,15 @@ static int set_feature_hw_gro(struct net_device *netdev, bool enable)
 	mutex_lock(&priv->state_lock);
 	new_params = priv->channels.params;
 
+	if (new_params.packet_merge.shampo_hds_only) {
+		err = -EINVAL;
+		netdev_warn(netdev, "Cannot enable HW GRO with header data split only mode\n");
+		goto out;
+	}
+
 	if (enable) {
 		new_params.packet_merge.type = MLX5E_PACKET_MERGE_SHAMPO;
+		new_params.packet_merge.shampo_hds_only = false;
 	} else if (new_params.packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO) {
 		new_params.packet_merge.type = MLX5E_PACKET_MERGE_NONE;
 	} else {
@@ -4401,6 +4408,12 @@ static netdev_features_t mlx5e_fix_features(struct net_device *netdev,
 			netdev_warn(netdev, "Disabling HW-GRO, not supported when CQE compress is active\n");
 			features &= ~NETIF_F_GRO_HW;
 		}
+	}
+
+	if (params->packet_merge.shampo_hds_only) {
+		features &= ~NETIF_F_GRO_HW;
+		if (netdev->features & NETIF_F_GRO_HW)
+			netdev_warn(netdev, "Disabling HW GRO to allow header data split only mode\n");
 	}
 
 	if (mlx5e_is_uplink_rep(priv)) {

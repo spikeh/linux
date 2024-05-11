@@ -353,9 +353,11 @@ static void mlx5e_get_ringparam(struct net_device *dev,
 
 int mlx5e_ethtool_set_ringparam(struct mlx5e_priv *priv,
 				struct ethtool_ringparam *param,
+				struct kernel_ethtool_ringparam *kernel_param,
 				struct netlink_ext_ack *extack)
 {
 	struct mlx5e_params new_params;
+	bool reset = false;
 	u8 log_rq_size;
 	u8 log_sq_size;
 	int err = 0;
@@ -374,18 +376,41 @@ int mlx5e_ethtool_set_ringparam(struct mlx5e_priv *priv,
 		return -EINVAL;
 	}
 
+	if (kernel_param->tcp_data_split != ETHTOOL_TCP_DATA_SPLIT_DISABLED &&
+	    (!MLX5_CAP_GEN(priv->mdev, shampo) || !MLX5_CAP_SHAMPO(priv->mdev, shampo_header_split))) {
+		netdev_warn(priv->netdev, "%s: tcp_data_split only mode is not supported on this device\n",
+			    __func__);
+		return -EOPNOTSUPP;
+	}
+
 	log_rq_size = order_base_2(param->rx_pending);
 	log_sq_size = order_base_2(param->tx_pending);
 
-	if (log_rq_size == priv->channels.params.log_rq_mtu_frames &&
+	if (kernel_param->tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
+	    priv->channels.params.packet_merge.type != MLX5E_PACKET_MERGE_SHAMPO)
+		reset = true;
+	else if (kernel_param->tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_DISABLED &&
+		 priv->channels.params.packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO)
+		reset = true;
+
+	if (!reset && log_rq_size == priv->channels.params.log_rq_mtu_frames &&
 	    log_sq_size == priv->channels.params.log_sq_size)
 		return 0;
 
 	mutex_lock(&priv->state_lock);
 
 	new_params = priv->channels.params;
+
 	new_params.log_rq_mtu_frames = log_rq_size;
 	new_params.log_sq_size = log_sq_size;
+
+	if (kernel_param->tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
+		new_params.packet_merge.type = MLX5E_PACKET_MERGE_SHAMPO;
+		new_params.packet_merge.shampo_hds_only = true;
+	} else {
+		new_params.packet_merge.type = MLX5E_PACKET_MERGE_NONE;
+		new_params.packet_merge.shampo_hds_only = false;
+	}
 
 	err = mlx5e_validate_params(priv->mdev, &new_params);
 	if (err)
@@ -406,7 +431,7 @@ static int mlx5e_set_ringparam(struct net_device *dev,
 {
 	struct mlx5e_priv *priv = netdev_priv(dev);
 
-	return mlx5e_ethtool_set_ringparam(priv, param, extack);
+	return mlx5e_ethtool_set_ringparam(priv, param, kernel_param, extack);
 }
 
 void mlx5e_ethtool_get_channels(struct mlx5e_priv *priv,
@@ -2600,6 +2625,7 @@ const struct ethtool_ops mlx5e_ethtool_ops = {
 				     ETHTOOL_COALESCE_MAX_FRAMES |
 				     ETHTOOL_COALESCE_USE_ADAPTIVE |
 				     ETHTOOL_COALESCE_USE_CQE,
+	.supported_ring_params = ETHTOOL_RING_USE_TCP_DATA_SPLIT,
 	.get_drvinfo       = mlx5e_get_drvinfo,
 	.get_link          = ethtool_op_get_link,
 	.get_link_ext_state  = mlx5e_get_link_ext_state,
