@@ -909,6 +909,18 @@ static inline u8 get_cqe_l4_hdr_type(struct mlx5_cqe64 *cqe)
 	return (cqe->l4_l3_hdr_type >> 4) & 0x7;
 }
 
+/* Header Data Split Type
+ * 00 - no split
+ * 01 - split at IP Header (ULP Header)
+ * 10 - split at TCP/UDP Header (ULP Payload)
+ * 11 - split at Look Ahead
+ * When tunneled bit is set indicates split for outer packet.
+ */
+static inline u8 get_cqe_hds_type(struct mlx5_cqe64 *cqe)
+{
+	return (cqe->hds_ip_ext >> 6) & 0x3;
+}
+
 static inline bool cqe_is_tunneled(struct mlx5_cqe64 *cqe)
 {
 	return cqe->tls_outer_l3_tunneled & 0x1;
@@ -1224,6 +1236,7 @@ enum mlx5_cap_type {
 	MLX5_CAP_DEV_EVENT = 0x14,
 	MLX5_CAP_IPSEC,
 	MLX5_CAP_CRYPTO = 0x1a,
+	MLX5_CAP_SHAMPO = 0x1d,
 	MLX5_CAP_MACSEC = 0x1f,
 	MLX5_CAP_GENERAL_2 = 0x20,
 	MLX5_CAP_PORT_SELECTION = 0x25,
@@ -1440,6 +1453,9 @@ enum mlx5_qcam_feature_groups {
 
 #define MLX5_CAP_MACSEC(mdev, cap)\
 	MLX5_GET(macsec_cap, (mdev)->caps.hca[MLX5_CAP_MACSEC]->cur, cap)
+
+#define MLX5_CAP_SHAMPO(mdev, cap) \
+	MLX5_GET(shampo_cap, mdev->caps.hca[MLX5_CAP_SHAMPO]->cur, cap)
 
 enum {
 	MLX5_CMD_STAT_OK			= 0x0,
