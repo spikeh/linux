@@ -920,19 +920,31 @@ int mlx5e_build_rq_param(struct mlx5_core_dev *mdev,
 		MLX5_SET(wq, wq, log_wq_sz, mlx5e_mpwqe_get_log_rq_size(mdev, params, xsk));
 		if (params->packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO) {
 			MLX5_SET(wq, wq, shampo_enable, true);
-			MLX5_SET(wq, wq, log_reservation_size,
-				 mlx5e_shampo_get_log_rsrv_size(mdev, params));
-			MLX5_SET(wq, wq,
-				 log_max_num_of_packets_per_reservation,
-				 mlx5e_shampo_get_log_pkt_per_rsrv(mdev, params));
+
+			/* 0x0 HW GRO */
+			/* 0x1 HDS only mode */
+			MLX5_SET(wq, wq, shampo_mode, !!params->packet_merge.shampo_hds_only);
 			MLX5_SET(wq, wq, log_headers_entry_size,
 				 mlx5e_shampo_get_log_hd_entry_size(mdev, params));
-			MLX5_SET(rqc, rqc, reservation_timeout,
-				 mlx5e_choose_lro_timeout(mdev, MLX5E_DEFAULT_SHAMPO_TIMEOUT));
-			MLX5_SET(rqc, rqc, shampo_match_criteria_type,
-				 MLX5_RQC_SHAMPO_MATCH_CRITERIA_TYPE_EXTENDED);
 			MLX5_SET(rqc, rqc, shampo_no_match_alignment_granularity,
 				 MLX5_RQC_SHAMPO_NO_MATCH_ALIGNMENT_GRANULARITY_STRIDE);
+
+			if (!params->packet_merge.shampo_hds_only) { /* allow HW GRO */
+				MLX5_SET(rqc, rqc, shampo_match_criteria_type,
+					 MLX5_RQC_SHAMPO_MATCH_CRITERIA_TYPE_EXTENDED);
+				MLX5_SET(wq, wq, log_reservation_size,
+					 mlx5e_shampo_get_log_rsrv_size(mdev, params));
+				MLX5_SET(wq, wq,
+					 log_max_num_of_packets_per_reservation,
+					 mlx5e_shampo_get_log_pkt_per_rsrv(mdev, params));
+				MLX5_SET(rqc, rqc, reservation_timeout,
+					 mlx5e_choose_lro_timeout(mdev, MLX5E_DEFAULT_SHAMPO_TIMEOUT));
+				// TODO: are these dupes?
+				MLX5_SET(rqc, rqc, shampo_match_criteria_type,
+					 MLX5_RQC_SHAMPO_MATCH_CRITERIA_TYPE_EXTENDED);
+				MLX5_SET(rqc, rqc, shampo_no_match_alignment_granularity,
+					 MLX5_RQC_SHAMPO_NO_MATCH_ALIGNMENT_GRANULARITY_STRIDE);
+			}
 		}
 		break;
 	}

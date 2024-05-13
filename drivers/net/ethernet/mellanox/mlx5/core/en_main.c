@@ -1289,8 +1289,11 @@ int mlx5e_open_rq(struct mlx5e_params *params, struct mlx5e_rq_param *param,
 	struct mlx5_core_dev *mdev = rq->mdev;
 	int err;
 
-	if (params->packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO)
+	if (params->packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO) {
 		__set_bit(MLX5E_RQ_STATE_SHAMPO, &rq->state);
+		if (params->packet_merge.shampo_hds_only)
+			__set_bit(MLX5E_RQ_STATE_HDS_ONLY, &rq->state);
+	}
 
 	err = mlx5e_alloc_rq(params, xsk, param, node, rq);
 	if (err)

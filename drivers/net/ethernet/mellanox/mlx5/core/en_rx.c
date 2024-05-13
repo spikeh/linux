@@ -2307,6 +2307,31 @@ static void mlx5e_handle_rx_cqe_mpwrq_shampo(struct mlx5e_rq *rq, struct mlx5_cq
 		goto mpwrq_cqe_out;
 	}
 
+	if (test_bit(MLX5E_RQ_STATE_HDS_ONLY, &rq->state)) {
+		struct sk_buff *skb;
+
+		if (likely(head_size)) {
+			struct mlx5e_frag_page *frag_page;
+
+			skb = mlx5e_skb_from_cqe_shampo(rq, wi, cqe, header_index);
+			if (unlikely(!skb))
+				goto free_hd_entry;
+
+			frag_page = &wi->alloc_units.frag_pages[page_idx];
+			mlx5e_shampo_fill_skb_data(skb, rq, frag_page, data_bcnt, data_offset);
+		} else {
+			skb = mlx5e_skb_from_cqe_mpwrq_nonlinear(rq, wi, cqe, cqe_bcnt,
+								 data_offset, page_idx);
+			if (unlikely(!skb))
+				goto free_hd_entry;
+		}
+
+		mlx5e_build_rx_skb(cqe, cqe_bcnt, rq, skb);
+		skb_reset_network_header(skb);
+		napi_gro_receive(rq->cq.napi, skb);
+		goto free_hd_entry;
+	}
+
 	if (*skb && (!match || !(mlx5e_hw_gro_skb_has_enough_space(*skb, data_bcnt)))) {
 		match = false;
 		mlx5e_shampo_flush_skb(rq, cqe, match);

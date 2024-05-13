@@ -272,6 +272,7 @@ enum packet_merge {
 
 struct mlx5e_packet_merge_param {
 	enum packet_merge type;
+	bool shampo_hds_only;
 	u32 timeout;
 };
 
@@ -326,6 +327,7 @@ enum {
 	MLX5E_RQ_STATE_CSUM_FULL, /* cqe_csum_full hw bit is set */
 	MLX5E_RQ_STATE_MINI_CQE_HW_STRIDX, /* set when mini_cqe_resp_stride_index cap is used */
 	MLX5E_RQ_STATE_SHAMPO, /* set when SHAMPO cap is used */
+	MLX5E_RQ_STATE_HDS_ONLY, /* set when header data split only mode */
 	MLX5E_RQ_STATE_MINI_CQE_ENHANCED,  /* set when enhanced mini_cqe_cap is used */
 	MLX5E_RQ_STATE_XSK, /* set to indicate an xsk rq */
 	MLX5E_NUM_RQ_STATES, /* Must be kept last */
