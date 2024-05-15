@@ -2316,15 +2316,18 @@ static void mlx5e_handle_rx_cqe_mpwrq_shampo(struct mlx5e_rq *rq, struct mlx5_cq
 			skb = mlx5e_skb_from_cqe_shampo(rq, wi, cqe, header_index);
 			if (unlikely(!skb))
 				goto free_hd_entry;
-
 			frag_page = &wi->alloc_units.frag_pages[page_idx];
 			mlx5e_shampo_fill_skb_data(skb, rq, frag_page, data_bcnt, data_offset);
+			stats->hds_only++;
 		} else {
 			skb = mlx5e_skb_from_cqe_mpwrq_nonlinear(rq, wi, cqe, cqe_bcnt,
 								 data_offset, page_idx);
 			if (unlikely(!skb))
 				goto free_hd_entry;
 		}
+
+		stats->packets++;
+		stats->bytes += cqe_bcnt;
 
 		mlx5e_build_rx_skb(cqe, cqe_bcnt, rq, skb);
 		skb_reset_network_header(skb);

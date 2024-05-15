@@ -156,6 +156,7 @@ struct mlx5e_sw_stats {
 	u64 rx_gro_large_hds;
 	u64 rx_hds_nodata_packets;
 	u64 rx_hds_nodata_bytes;
+	u64 rx_hds_only;
 	u64 rx_mcast_packets;
 	u64 rx_ecn_mark;
 	u64 rx_removed_vlan_packets;
@@ -356,6 +357,7 @@ struct mlx5e_rq_stats {
 	u64 gro_large_hds;
 	u64 hds_nodata_packets;
 	u64 hds_nodata_bytes;
+	u64 hds_only;
 	u64 mcast_packets;
 	u64 ecn_mark;
 	u64 removed_vlan_packets;

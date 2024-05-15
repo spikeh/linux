@@ -216,6 +216,9 @@ the software port.
    * - `rx[i]_hds_nodata_bytes`
      - Number of bytes for header only packets in header/data split mode
        [#accel]_.
+   * - `rx[i]_hds_only`
+     - Number of receive packets recived with only header split and no GRO HW
+       aggregation
      - Informative
 
    * - `rx[i]_lro_packets`
