@@ -782,6 +782,30 @@ static int mlx5_rq_shampo_alloc(struct mlx5_core_dev *mdev,
 	*pool_size += (rq->mpwqe.shampo->hd_per_wqe * wq_size) /
 		     MLX5E_SHAMPO_WQ_HEADER_PER_PAGE;
 
+	/* separate page pool for shampo */
+	{
+		struct page_pool_params pp_params = { 0 };
+		u32 pool_size = (rq->mpwqe.shampo->hd_per_wqe * wq_size) /
+		     MLX5E_SHAMPO_WQ_HEADER_PER_PAGE;
+
+		pp_params.order     = 0;
+		pp_params.flags     = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV;
+		pp_params.pool_size = pool_size;
+		pp_params.nid       = node;
+		pp_params.dev       = rq->pdev;
+		pp_params.napi      = rq->cq.napi;
+		pp_params.netdev    = rq->netdev;
+		pp_params.dma_dir   = rq->buff.map_dir;
+		pp_params.max_len   = PAGE_SIZE;
+
+		rq->hds_page_pool = page_pool_create(&pp_params);
+		if (IS_ERR(rq->hds_page_pool)) {
+			err = PTR_ERR(rq->hds_page_pool);
+			rq->hds_page_pool = NULL;
+			goto err_hds_page_pool;
+		}
+	}
+
 	/* gro tracking data */
 	rq->hw_gro_data = kvzalloc_node(sizeof(*rq->hw_gro_data), GFP_KERNEL, node);
 	if (!rq->hw_gro_data) {
@@ -792,6 +816,8 @@ static int mlx5_rq_shampo_alloc(struct mlx5_core_dev *mdev,
 	return 0;
 
 err_hw_gro_data:
+	page_pool_destroy(rq->hds_page_pool);
+err_hds_page_pool:
 	mlx5_core_destroy_mkey(mdev, rq->mpwqe.shampo->mkey);
 err_umr_mkey:
 	mlx5e_rq_shampo_hd_info_free(rq);
@@ -806,6 +832,7 @@ static void mlx5e_rq_free_shampo(struct mlx5e_rq *rq)
 		return;
 
 	kvfree(rq->hw_gro_data);
+	page_pool_destroy(rq->hds_page_pool);
 	mlx5e_rq_shampo_hd_info_free(rq);
 	mlx5_core_destroy_mkey(rq->mdev, rq->mpwqe.shampo->mkey);
 	kvfree(rq->mpwqe.shampo);

@@ -711,6 +711,7 @@ struct mlx5e_rq {
 	struct mlx5e_xdpsq    *xdpsq;
 	DECLARE_BITMAP(flags, 8);
 	struct page_pool      *page_pool;
+	struct page_pool      *hds_page_pool;
 
 	/* AF_XDP zero-copy */
 	struct xsk_buff_pool  *xsk_pool;
