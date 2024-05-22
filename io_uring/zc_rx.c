@@ -523,6 +523,7 @@ static bool io_pp_zc_release_page(struct page_pool *pp, netmem_ref netmem)
 
 	niov = netmem_to_net_iov(netmem);
 	buf = io_niov_to_buf(niov);
+	//printk(KERN_INFO "----- io_pp_zc_release_page: releasing page, physical address: %#llx\n", (unsigned long long)page_to_phys(buf->page));
 
 	if (io_zc_rx_buf_put(buf, 1))
 		io_zc_rx_recycle_buf(ifq->pool, buf);
@@ -569,6 +570,7 @@ static int io_pp_map_buf(struct io_zc_rx_pool *pool, int idx,
 	dma_addr_t dma_addr;
 	int ret;
 
+	// NOTE: we mapping buf->page to get dmr_addr, then set that in netmem->dma_addr
 	dma_addr = dma_map_page_attrs(pp->p.dev, page, 0,
 				      PAGE_SIZE << pp->p.order, pp->p.dma_dir,
 				      IO_PP_DMA_ATTRS);
@@ -582,6 +584,7 @@ static int io_pp_map_buf(struct io_zc_rx_pool *pool, int idx,
 				     IO_PP_DMA_ATTRS);
 		return -EFAULT;
 	}
+	//printk(KERN_INFO "----- io_pp_map_buf: address: %#llx, dma_addr_t: %#llx, netmem refcnt addr=%px\n", (unsigned long long)page_address(buf->page), (unsigned long long)dma_addr, &buf->niov.pp_ref_count);
 
 	io_zc_sync_for_device(pp, netmem);
 	return 0;
@@ -668,7 +671,7 @@ static void io_napi_refill(void *data)
 	if (WARN_ON_ONCE(!ifq->pp))
 		return;
 
-	netmem = page_pool_alloc_netmem(ifq->pp, GFP_ATOMIC | __GFP_NOWARN);
+	netmem = page_pool_alloc_netmem(ifq->pp, GFP_ATOMIC | __GFP_NOWARN, true);
 	if (!netmem)
 		return;
 	if (WARN_ON_ONCE(!netmem_is_net_iov(netmem)))
@@ -757,6 +760,7 @@ static int zc_rx_recv_frag(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
 {
 	off += skb_frag_off(frag);
 
+	// NOTE: checking frag->netmem is a net_iov
 	if (likely(skb_frag_is_net_iov(frag))) {
 		struct io_zc_rx_buf *buf;
 		struct net_iov *niov;
@@ -767,6 +771,7 @@ static int zc_rx_recv_frag(struct io_kiocb *req, struct io_zc_rx_ifq *ifq,
 			return -EFAULT;
 
 		buf = io_niov_to_buf(niov);
+
 		if (!zc_rx_queue_cqe(req, buf, ifq, off, len))
 			return -ENOSPC;
 		io_zc_rx_get_buf_uref(buf);
@@ -828,6 +833,7 @@ zc_rx_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 	start = skb_headlen(skb);
 
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+		// NOTE: these are frags set in __bnxt_rx_agg_pages()
 		const skb_frag_t *frag;
 
 		if (WARN_ON(start > offset + len))

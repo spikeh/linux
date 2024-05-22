@@ -1265,6 +1265,7 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 
 	if (issue_flags & IO_URING_F_MULTISHOT)
 		return IOU_ISSUE_SKIP_COMPLETE;
+	//printk("----- io_recvzc: return EAGAIN\n");
 	return -EAGAIN;
 }
 

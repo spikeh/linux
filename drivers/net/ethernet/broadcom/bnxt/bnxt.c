@@ -55,6 +55,8 @@
 #include <net/page_pool/helpers.h>
 #include <linux/align.h>
 #include <net/netdev_queues.h>
+#include <net/netdev_rx_queue.h>
+#include <linux/io_uring/net.h>
 
 #include "bnxt_hsi.h"
 #include "bnxt.h"
@@ -844,24 +846,40 @@ static void bnxt_tx_int(struct bnxt *bp, struct bnxt_napi *bnapi, int budget)
 	bnapi->events &= ~BNXT_TX_CMP_EVENT;
 }
 
+// NOTE: struct page * is always going to be a netmem
+// it is either a real struct page ptr - kernel memory (no NET_IOV bit)
+// or it is a struct net_iov (with NET_IOV bit) - inside of a io_zc_rx_buf
 static struct page *__bnxt_alloc_rx_page(struct bnxt *bp, dma_addr_t *mapping,
 					 struct bnxt_rx_ring_info *rxr,
 					 unsigned int *offset,
 					 gfp_t gfp)
 {
+	dma_addr_t dma_addr;
 	struct page *page;
+	netmem_ref netmem;
 
 	if (PAGE_SIZE > BNXT_RX_PAGE_SIZE) {
+		// TODO: how to handle the frag (not page) path?
 		page = page_pool_dev_alloc_frag(rxr->page_pool, offset,
 						BNXT_RX_PAGE_SIZE);
+		dma_addr = page_pool_get_dma_addr(page);
 	} else {
-		page = page_pool_dev_alloc_pages(rxr->page_pool);
+		netmem = page_pool_alloc_netmem(rxr->page_pool, gfp, false);
+		if (!netmem)
+			return NULL;
+		page = (__force struct page *)netmem;
+		dma_addr = page_pool_get_dma_addr_netmem(netmem);
+		if (netmem_is_net_iov(netmem)) {
+			WARN_ON(!rxr->zc_enabled);
+			// buf = container_of(netmem_to_net_iov(netmem), struct io_zc_rx_buf, niov);
+			//printk(KERN_INFO "__bnxt_alloc_rx_page: Page address: %#llx, dma_addr_t: %#llx\n", (unsigned long long)page_address(buf->page), dma_addr);
+		}
 		*offset = 0;
 	}
 	if (!page)
 		return NULL;
 
-	*mapping = page_pool_get_dma_addr(page) + *offset;
+	*mapping = dma_addr + *offset;
 	return page;
 }
 
@@ -905,9 +923,11 @@ int bnxt_alloc_rx_data(struct bnxt *bp, struct bnxt_rx_ring_info *rxr,
 			return -ENOMEM;
 
 		mapping += bp->rx_dma_offset;
+		// NOTE: netmem alloc from pp is stored as rx_buf->data as a void *
 		rx_buf->data = page;
 		rx_buf->data_ptr = page_address(page) + offset + bp->rx_offset;
 	} else {
+		// TODO: deal with frags
 		u8 *data = __bnxt_alloc_rx_frag(bp, &mapping, gfp);
 
 		if (!data)
@@ -1168,6 +1188,7 @@ static struct sk_buff *bnxt_rx_skb(struct bnxt *bp,
 
 	skb_reserve(skb, bp->rx_offset);
 	skb_put(skb, offset_and_len & 0xffff);
+
 	return skb;
 }
 
@@ -1214,12 +1235,14 @@ static u32 __bnxt_rx_agg_pages(struct bnxt *bp,
 		 * need to clear the cons entry now.
 		 */
 		mapping = cons_rx_buf->mapping;
+		// NOTE: page is saved here only for alloc failures
 		page = cons_rx_buf->page;
 		cons_rx_buf->page = NULL;
 
 		if (xdp && page_is_pfmemalloc(page))
 			xdp_buff_set_frag_pfmemalloc(xdp);
 
+		// NOTE: realloc a page for the nulled out rx_agg_buf
 		if (bnxt_alloc_rx_page(bp, rxr, prod, GFP_ATOMIC) != 0) {
 			--shinfo->nr_frags;
 			cons_rx_buf->page = page;
@@ -1995,6 +2018,7 @@ static enum pkt_hash_types bnxt_rss_ext_op(struct bnxt *bp,
  * -ENOMEM - packet aborted due to out of memory
  * -EIO    - packet aborted due to hw error indicated in BD
  */
+// NOTE: main function for rx
 static int bnxt_rx_pkt(struct bnxt *bp, struct bnxt_cp_ring_info *cpr,
 		       u32 *raw_cons, u8 *event)
 {
@@ -3638,7 +3662,7 @@ static void bnxt_free_rx_rings(struct bnxt *bp)
 
 static int bnxt_alloc_rx_page_pool(struct bnxt *bp,
 				   struct bnxt_rx_ring_info *rxr,
-				   int numa_node)
+				   int numa_node, int qid)
 {
 	struct page_pool_params pp = { 0 };
 
@@ -3652,6 +3676,7 @@ static int bnxt_alloc_rx_page_pool(struct bnxt *bp,
 	pp.dma_dir = bp->rx_dir;
 	pp.max_len = PAGE_SIZE;
 	pp.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV;
+	pp.queue = __netif_get_rx_queue(bp->dev, qid);
 
 	rxr->page_pool = page_pool_create(&pp);
 	if (IS_ERR(rxr->page_pool)) {
@@ -3685,7 +3710,7 @@ static int bnxt_alloc_rx_rings(struct bnxt *bp)
 		cpu_node = cpu_to_node(cpu);
 		netdev_dbg(bp->dev, "Allocating page pool for rx_ring[%d] on numa_node: %d\n",
 			   i, cpu_node);
-		rc = bnxt_alloc_rx_page_pool(bp, rxr, cpu_node);
+		rc = bnxt_alloc_rx_page_pool(bp, rxr, cpu_node, i);
 		if (rc)
 			return rc;
 
@@ -4114,6 +4139,7 @@ static int bnxt_alloc_one_rx_ring(struct bnxt *bp, struct bnxt_rx_ring_info *rxr
 	int i;
 
 	prod = rxr->rx_prod;
+	rxr->idx = rxr->bnapi->index;
 	for (i = 0; i < bp->rx_ring_size; i++) {
 		if (bnxt_alloc_rx_data(bp, rxr, prod, GFP_KERNEL)) {
 			netdev_warn(dev, "init'ed rx ring %d with %d/%d skbs only\n",

@@ -809,7 +809,7 @@ static noinline struct sk_buff *veth_iou_rcv_skb(struct veth_rq *rq,
 	for (i = 0; i < MAX_SKB_FRAGS && off < skb->len; i++) {
 		netmem_ref netmem;
 
-		netmem = page_pool_alloc_netmem(rq->page_pool, GFP_ATOMIC | __GFP_NOWARN);
+		netmem = page_pool_alloc_netmem(rq->page_pool, GFP_ATOMIC | __GFP_NOWARN, false);
 		if (!netmem) {
 			consume_skb(nskb);
 			goto drop;
