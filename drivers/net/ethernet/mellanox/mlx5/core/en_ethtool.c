@@ -412,6 +412,22 @@ int mlx5e_ethtool_set_ringparam(struct mlx5e_priv *priv,
 		new_params.packet_merge.shampo_hds_only = false;
 	}
 
+	if (priv->channels.params.packet_merge.type != new_params.packet_merge.type) {
+		if (priv->netdev->features & NETIF_F_GRO_HW) {
+			err = -EINVAL;
+			netdev_warn(priv->netdev, "%s: Cannot change packet merge/header split mode while HW GRO is enabled\n",
+			    __func__);
+			goto unlock;
+		}
+
+		if (!MLX5E_GET_PFLAG(&priv->channels.params, MLX5E_PFLAG_RX_STRIDING_RQ)) {
+			err = -EINVAL;
+			netdev_warn(priv->netdev, "%s: Cannot enable packet merge/header split mode while RX striding RQ is disabled\n",
+				    __func__);
+			goto unlock;
+		}
+	}
+
 	err = mlx5e_validate_params(priv->mdev, &new_params);
 	if (err)
 		goto unlock;
@@ -2205,7 +2221,7 @@ static int set_pflag_rx_striding_rq(struct net_device *netdev, bool enable)
 		if (err)
 			return err;
 	} else if (priv->channels.params.packet_merge.type != MLX5E_PACKET_MERGE_NONE) {
-		netdev_warn(netdev, "Can't set legacy RQ with HW-GRO/LRO, disable them first\n");
+		netdev_warn(netdev, "Can't set legacy RQ with TCP-data-split/HW-GRO/LRO, disable them first\n");
 		return -EINVAL;
 	}
 
