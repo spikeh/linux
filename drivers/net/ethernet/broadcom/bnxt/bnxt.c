@@ -6524,6 +6524,25 @@ vnic_no_ring_grps:
 	return rc;
 }
 
+int bnxt_hwrm_vnic_update(struct bnxt *bp, struct bnxt_vnic_info *vnic,
+			  u8 valid)
+{
+	struct hwrm_vnic_update_input *req;
+	int rc;
+
+	rc = hwrm_req_init(bp, req, HWRM_VNIC_UPDATE);
+	if (rc)
+		return rc;
+
+	req->vnic_id = cpu_to_le32(vnic->fw_vnic_id);
+	if (valid & VNIC_UPDATE_REQ_ENABLES_MRU_VALID)
+		req->mru = cpu_to_le16(vnic->mru);
+
+	req->enables = cpu_to_le32(valid);
+	rc = hwrm_req_send(bp, req);
+	return rc;
+}
+
 static int bnxt_hwrm_vnic_qcaps(struct bnxt *bp)
 {
 	struct hwrm_vnic_qcaps_output *resp;
