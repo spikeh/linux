@@ -73,9 +73,15 @@ static inline unsigned long net_iov_virtual_addr(const struct net_iov *niov)
 	       ((unsigned long)net_iov_idx(niov) << PAGE_SHIFT);
 }
 
+static inline struct net_devmem_dmabuf_binding *
+net_devmem_iov_binding(const struct net_iov *niov)
+{
+	return net_iov_owner(niov)->binding;
+}
+
 static inline u32 net_devmem_iov_binding_id(const struct net_iov *niov)
 {
-	return net_iov_owner(niov)->binding->id;
+	return net_devmem_iov_binding(niov)->id;
 }
 
 /* This returns the absolute dma_addr_t calculated from
@@ -94,12 +100,6 @@ static inline dma_addr_t net_devmem_iov_dma_addr(const struct net_iov *niov)
 
 	return owner->base_dma_addr +
 	       ((dma_addr_t)net_iov_idx(niov) << PAGE_SHIFT);
-}
-
-static inline struct net_devmem_dmabuf_binding *
-net_devmem_iov_binding(const struct net_iov *niov)
-{
-	return net_iov_owner(niov)->binding;
 }
 
 /* netmem */
