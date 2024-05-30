@@ -73,7 +73,7 @@ static inline unsigned long net_iov_virtual_addr(const struct net_iov *niov)
 	       ((unsigned long)net_iov_idx(niov) << PAGE_SHIFT);
 }
 
-static inline u32 net_iov_binding_id(const struct net_iov *niov)
+static inline u32 net_devmem_iov_binding_id(const struct net_iov *niov)
 {
 	return net_iov_owner(niov)->binding->id;
 }
@@ -87,12 +87,8 @@ static inline u32 net_iov_binding_id(const struct net_iov *niov)
  * The page_pool-owner niov->dma_addr is the absolute dma_addr compressed into
  * an unsigned long. Special handling is done when the unsigned long is 32-bit
  * but the dma_addr_t is 64-bit.
- *
- * In general code looking for the dma_addr_t should use net_iov_dma_addr(),
- * while page_pool code looking for the unsigned long dma_addr which mirrors
- * the field in struct page should use niov->dma_addr.
  */
-static inline dma_addr_t net_iov_dma_addr(const struct net_iov *niov)
+static inline dma_addr_t net_devmem_iov_dma_addr(const struct net_iov *niov)
 {
 	struct dmabuf_genpool_chunk_owner *owner = net_iov_owner(niov);
 
@@ -101,7 +97,7 @@ static inline dma_addr_t net_iov_dma_addr(const struct net_iov *niov)
 }
 
 static inline struct net_devmem_dmabuf_binding *
-net_iov_binding(const struct net_iov *niov)
+net_devmem_iov_binding(const struct net_iov *niov)
 {
 	return net_iov_owner(niov)->binding;
 }

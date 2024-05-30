@@ -84,8 +84,8 @@ net_devmem_alloc_dmabuf(struct net_devmem_dmabuf_binding *binding)
 
 void net_devmem_free_dmabuf(struct net_iov *niov)
 {
-	struct net_devmem_dmabuf_binding *binding = net_iov_binding(niov);
-	unsigned long dma_addr = net_iov_dma_addr(niov);
+	struct net_devmem_dmabuf_binding *binding = net_devmem_iov_binding(niov);
+	unsigned long dma_addr = net_devmem_iov_dma_addr(niov);
 
 	if (gen_pool_has_addr(binding->chunk_pool, dma_addr, PAGE_SIZE))
 		gen_pool_free(binding->chunk_pool, dma_addr, PAGE_SIZE);
@@ -327,7 +327,7 @@ static netmem_ref mp_dmabuf_devmem_alloc_pages(struct page_pool *pool,
 	if (!niov)
 		return 0;
 
-	dma_addr = net_iov_dma_addr(niov);
+	dma_addr = net_devmem_iov_dma_addr(niov);
 
 	netmem = net_iov_to_netmem(niov);
 
