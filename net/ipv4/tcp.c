@@ -278,6 +278,7 @@
 #include <net/sock.h>
 #include <net/rstreason.h>
 #include <net/page_pool/types.h>
+#include <net/devmem.h>
 
 #include <linux/uaccess.h>
 #include <asm/ioctls.h>

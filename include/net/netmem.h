@@ -8,7 +8,6 @@
 #ifndef _NET_NETMEM_H
 #define _NET_NETMEM_H
 
-#include <net/devmem.h>
 #include <net/net_debug.h>
 
 /* net_iov */
@@ -27,19 +26,6 @@ struct net_iov_area {
 	/* Array of net_iovs for this area. */
 	struct net_iov *niovs;
 	size_t num_niovs;
-};
-
-/* Owner of the dma-buf chunks inserted into the gen pool. Each scatterlist
- * entry from the dmabuf is inserted into the genpool as a chunk, and needs
- * this owner struct to keep track of some metadata necessary to create
- * allocations from this chunk.
- */
-struct dmabuf_genpool_chunk_owner {
-	struct net_iov_area area;
-	struct net_devmem_dmabuf_binding *binding;
-
-	/* dma_addr of the start of the chunk.  */
-	dma_addr_t base_dma_addr;
 };
 
 struct net_iov {
@@ -93,45 +79,6 @@ static inline unsigned long net_iov_virtual_addr(const struct net_iov *niov)
 
 	return owner->base_virtual +
 	       ((unsigned long)net_iov_idx(niov) << PAGE_SHIFT);
-}
-
-static inline struct dmabuf_genpool_chunk_owner *
-net_devmem_iov_to_chunk_owner(const struct net_iov *niov)
-{
-	struct net_iov_area *owner = net_iov_owner(niov);
-
-	return container_of(owner, struct dmabuf_genpool_chunk_owner, area);
-}
-
-static inline struct net_devmem_dmabuf_binding *
-net_devmem_iov_binding(const struct net_iov *niov)
-{
-	return net_devmem_iov_to_chunk_owner(niov)->binding;
-}
-
-static inline u32 net_devmem_iov_binding_id(const struct net_iov *niov)
-{
-	return net_devmem_iov_binding(niov)->id;
-}
-
-
-/* This returns the absolute dma_addr_t calculated from
- * net_iov_owner(niov)->owner->base_dma_addr, not the page_pool-owned
- * niov->dma_addr.
- *
- * The absolute dma_addr_t is a dma_addr_t that is always uncompressed.
- *
- * The page_pool-owner niov->dma_addr is the absolute dma_addr compressed into
- * an unsigned long. Special handling is done when the unsigned long is 32-bit
- * but the dma_addr_t is 64-bit.
- */
-static inline dma_addr_t net_devmem_iov_dma_addr(const struct net_iov *niov)
-{
-	struct dmabuf_genpool_chunk_owner *owner;
-
-	owner = net_devmem_iov_to_chunk_owner(niov);
-	return owner->base_dma_addr +
-	       ((dma_addr_t)net_iov_idx(niov) << PAGE_SHIFT);
 }
 
 /* netmem */
