@@ -14983,6 +14983,34 @@ static int bnxt_alloc_rx_agg_bmap(struct bnxt *bp, struct bnxt_rx_ring_info *rxr
 	return 0;
 }
 
+static void __bnxt_print_rx_rings(struct bnxt *bp, struct bnxt_rx_ring_info *rxr, const char *msg)
+{
+	struct bnxt_ring_mem_info *rmem;
+	struct bnxt_ring_struct *ring;
+	int idx;
+
+	idx = rxr->rx_ring_struct.grp_idx;
+	printk("----- %s rxr idx=%d\n", msg, idx);
+	printk("----- %s rxr=%px, &bp->rx_ring[idx]=%px, bp->bnapi[idx]->rx_ring=%px\n", msg, rxr, &bp->rx_ring[idx], bp->bnapi[idx]->rx_ring);
+	printk("----- %s &rxr->bnapi->napi=%px, &bp->bnapi[i]->napi=%px\n", msg, &rxr->bnapi->napi, &bp->bnapi[idx]->napi);
+
+	ring = &rxr->rx_ring_struct;
+	rmem = &ring->ring_mem;
+	printk("----- %s rx ring pg_arr=%px, &rx_desc_ring=%px, rx_desc_ring[0]=%px\n", msg, rmem->pg_arr, &rxr->rx_desc_ring, rxr->rx_desc_ring[0]);
+	printk("----- %s rx ring dma_arr=%px, &rx_desc_mapping=%px, rx_desc_mapping[0]=0x%llx\n", msg, rmem->dma_arr, &rxr->rx_desc_mapping, rxr->rx_desc_mapping[0]);
+	printk("----- %s rx ring vmem=%px, &rx_buf_ring=%px, rx_buf_ring=%px\n", msg, rmem->vmem, &rxr->rx_buf_ring, rxr->rx_buf_ring);
+	printk("----- %s rx ring pg_tbl=%px, pg_tbl_map=%llu\n", msg, rmem->pg_tbl, rmem->pg_tbl_map);
+	printk("----- %s rx ring pg_tbl[0]=%llu, dma_arr[0]=%llu\n", msg, le64_to_cpu(rmem->pg_tbl[0]), rmem->dma_arr[0]);
+
+	ring = &rxr->rx_agg_ring_struct;
+	rmem = &ring->ring_mem;
+	printk("----- %s rx agg ring pg_arr=%px, &rx_agg_desc_ring=%px, rx_agg_desc_ring[0]=%px\n", msg, rmem->pg_arr, &rxr->rx_agg_desc_ring, rxr->rx_agg_desc_ring[0]);
+	printk("----- %s rx agg ring dma_arr=%px, &rx_agg_desc_mapping=%px, rx_agg_desc_mapping[0]=0x%llx\n", msg, rmem->dma_arr, &rxr->rx_agg_desc_mapping, rxr->rx_agg_desc_mapping[0]);
+	printk("----- %s rx agg ring vmem=%px, &rx_agg_ring=%px, rx_agg_ring=%px\n", msg, rmem->vmem, &rxr->rx_agg_ring, rxr->rx_agg_ring);
+	printk("----- %s rx agg ring pg_tbl=%px, pg_tbl_map=%llu\n", msg, rmem->pg_tbl, rmem->pg_tbl_map);
+	printk("----- %s rx agg ring pg_tbl[0]=%llu, dma_arr[0]=%llu\n", msg, le64_to_cpu(rmem->pg_tbl[0]), rmem->dma_arr[0]);
+}
+
 static int bnxt_queue_mem_alloc(struct net_device *dev, void *qmem, int idx)
 {
 	struct bnxt_rx_ring_info *rxr, *clone;
