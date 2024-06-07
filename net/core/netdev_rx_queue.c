@@ -9,7 +9,7 @@ int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 	void *new_mem, *old_mem;
 	int err;
 
-	if (!dev->queue_mgmt_ops->ndo_queue_stop ||
+	if (!dev->queue_mgmt_ops || !dev->queue_mgmt_ops->ndo_queue_stop ||
 	    !dev->queue_mgmt_ops->ndo_queue_mem_free ||
 	    !dev->queue_mgmt_ops->ndo_queue_mem_alloc ||
 	    !dev->queue_mgmt_ops->ndo_queue_start)
@@ -58,7 +58,7 @@ err_start_queue:
 		WARN(1,
 		     "Failed to restart old queue in error path. RX queue %d may be unhealthy.",
 		     rxq_idx);
-		dev->queue_mgmt_ops->ndo_queue_mem_free(dev, &old_mem);
+		dev->queue_mgmt_ops->ndo_queue_mem_free(dev, old_mem);
 	}
 
 err_free_new_queue_mem:
