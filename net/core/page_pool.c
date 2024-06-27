@@ -282,7 +282,7 @@ static int page_pool_init(struct page_pool *pool,
 		 */
 		ASSERT_RTNL();
 		pool->mp_priv = pool->slow.queue->mp_params.mp_priv;
-		pool->mp_ops = pool->p.queue->mp_params.mp_ops;
+		pool->mp_ops = pool->slow.queue->mp_params.mp_ops;
 	}
 
 	if (pool->mp_ops) {
@@ -507,9 +507,7 @@ static struct page *__page_pool_alloc_page_order(struct page_pool *pool,
 	page_pool_set_pp_info(pool, page_to_netmem(page));
 
 	/* Track how many pages are held 'in-flight' */
-	pool->pages_state_hold_cnt++;
-	trace_page_pool_state_hold(pool, page_to_netmem(page),
-				   pool->pages_state_hold_cnt);
+	page_pool_state_hold(pool, page_to_netmem(page));
 	return page;
 }
 
@@ -553,9 +551,7 @@ static noinline netmem_ref __page_pool_alloc_pages_slow(struct page_pool *pool,
 		page_pool_set_pp_info(pool, netmem);
 		pool->alloc.cache[pool->alloc.count++] = netmem;
 		/* Track how many pages are held 'in-flight' */
-		pool->pages_state_hold_cnt++;
-		trace_page_pool_state_hold(pool, netmem,
-					   pool->pages_state_hold_cnt);
+		page_pool_state_hold(pool, netmem);
 	}
 
 	/* Return last page */
@@ -620,28 +616,6 @@ s32 page_pool_inflight(const struct page_pool *pool, bool strict)
 	}
 
 	return inflight;
-}
-
-void page_pool_set_pp_info(struct page_pool *pool, netmem_ref netmem)
-{
-	netmem_set_pp(netmem, pool);
-	netmem_or_pp_magic(netmem, PP_SIGNATURE);
-
-	/* Ensuring all pages have been split into one fragment initially:
-	 * page_pool_set_pp_info() is only called once for every page when it
-	 * is allocated from the page allocator and page_pool_fragment_page()
-	 * is dirtying the same cache line as the page->pp_magic above, so
-	 * the overhead is negligible.
-	 */
-	page_pool_fragment_netmem(netmem, 1);
-	if (pool->has_init_callback)
-		pool->slow.init_callback(netmem, pool->slow.init_arg);
-}
-
-void page_pool_clear_pp_info(netmem_ref netmem)
-{
-	netmem_clear_pp_magic(netmem);
-	netmem_set_pp(netmem, NULL);
 }
 
 static __always_inline void __page_pool_release_page_dma(struct page_pool *pool,

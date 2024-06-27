@@ -159,6 +159,7 @@
 #include <net/page_pool/helpers.h>
 #include <net/rps.h>
 #include <linux/phy_link_topology.h>
+#include <net/devmem.h>
 
 #include "dev.h"
 #include "net-sysfs.h"

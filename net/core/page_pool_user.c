@@ -8,6 +8,7 @@
 #include <net/page_pool/helpers.h>
 #include <net/sock.h>
 #include <net/netdev_rx_queue.h>
+#include <net/devmem.h>
 
 #include "page_pool_priv.h"
 #include "netdev-genl-gen.h"
