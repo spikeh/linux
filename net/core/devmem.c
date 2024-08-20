@@ -19,6 +19,8 @@
 #include <net/devmem.h>
 #include <net/netdev_queues.h>
 
+#include "page_pool_priv.h"
+
 /* Device memory support */
 
 #if defined(CONFIG_DMA_SHARED_BUFFER) && defined(CONFIG_GENERIC_ALLOCATOR)
@@ -82,6 +84,10 @@ net_devmem_alloc_dmabuf(struct net_devmem_dmabuf_binding *binding)
 	offset = dma_addr - owner->base_dma_addr;
 	index = offset / PAGE_SIZE;
 	niov = &owner->niovs[index];
+
+	niov->pp_magic = 0;
+	niov->pp = NULL;
+	atomic_long_set(&niov->pp_ref_count, 0);
 
 	return niov;
 }
@@ -255,6 +261,8 @@ struct net_devmem_dmabuf_binding *net_devmem_bind_dmabuf(struct net_device *dev,
 		for (i = 0; i < owner->num_niovs; i++) {
 			niov = &owner->niovs[i];
 			niov->owner = owner;
+			page_pool_set_dma_addr_netmem(net_iov_to_netmem(niov),
+						      net_devmem_get_dma_addr(niov));
 		}
 
 		virtual += len;
