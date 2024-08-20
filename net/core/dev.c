@@ -9538,6 +9538,10 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 			NL_SET_ERR_MSG(extack, "Native and generic XDP can't be active at the same time");
 			return -EEXIST;
 		}
+		if (dev_get_min_mp_channel_count(dev)) {
+			NL_SET_ERR_MSG(extack, "XDP can't be installed on a netdev using memory providers");
+			return -EINVAL;
+		}
 		if (!offload && bpf_prog_is_offloaded(new_prog->aux)) {
 			NL_SET_ERR_MSG(extack, "Using offloaded program without HW_MODE flag is not supported");
 			return -EINVAL;
@@ -9820,6 +9824,20 @@ err_out:
 	if (old_prog)
 		bpf_prog_put(old_prog);
 	return err;
+}
+
+u32 dev_get_min_mp_channel_count(const struct net_device *dev)
+{
+	u32 i, max = 0;
+
+	ASSERT_RTNL();
+
+	for (i = 0; i < dev->real_num_rx_queues; i++)
+		if (dev->_rx[i].mp_params.mp_priv)
+			/* The channel count is the idx plus 1. */
+			max = i + 1;
+
+	return max;
 }
 
 /**
@@ -11358,6 +11376,7 @@ void unregister_netdevice_many_notify(struct list_head *head,
 		dev_tcx_uninstall(dev);
 		dev_xdp_uninstall(dev);
 		bpf_dev_bound_netdev_unregister(dev);
+		dev_dmabuf_uninstall(dev);
 
 		netdev_offload_xstats_disable_all(dev);
 
