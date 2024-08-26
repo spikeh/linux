@@ -77,7 +77,7 @@ static int io_open_zc_rxq(struct io_zcrx_ifq *ifq, unsigned ifq_idx)
 		rxq->mp_params.mp_priv = NULL;
 	}
 	ifq->if_rxq = ifq_idx;
-	return 0;
+	return ret;
 }
 
 static int io_close_zc_rxq(struct io_zcrx_ifq *ifq)
