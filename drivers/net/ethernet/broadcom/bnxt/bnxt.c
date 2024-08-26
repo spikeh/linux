@@ -15910,8 +15910,10 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (BNXT_SUPPORTS_NTUPLE_VNIC(bp))
 		bp->rss_cap |= BNXT_RSS_CAP_MULTI_RSS_CTX;
-	if (BNXT_SUPPORTS_QUEUE_API(bp))
+	//if (BNXT_SUPPORTS_QUEUE_API(bp)) {
+	//	printk("----- supports vnic reflush\n");
 		dev->queue_mgmt_ops = &bnxt_queue_mgmt_ops;
+	//}
 
 	rc = register_netdev(dev);
 	if (rc)
