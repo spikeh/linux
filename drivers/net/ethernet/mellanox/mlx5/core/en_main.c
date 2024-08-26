@@ -43,6 +43,7 @@
 #include <net/page_pool/types.h>
 #include <net/pkt_sched.h>
 #include <net/xdp_sock_drv.h>
+#include <net/netdev_rx_queue.h>
 #include "eswitch.h"
 #include "en.h"
 #include "en/dim.h"
@@ -941,7 +942,7 @@ static int mlx5e_alloc_rq(struct mlx5e_params *params,
 		struct page_pool_params pp_params = { 0 };
 
 		pp_params.order     = 0;
-		pp_params.flags     = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV;
+		pp_params.flags     = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV | PP_FLAG_ALLOW_UNREADABLE_NETMEM;
 		pp_params.pool_size = pool_size;
 		pp_params.nid       = node;
 		pp_params.dev       = rq->pdev;
@@ -949,6 +950,7 @@ static int mlx5e_alloc_rq(struct mlx5e_params *params,
 		pp_params.netdev    = rq->netdev;
 		pp_params.dma_dir   = rq->buff.map_dir;
 		pp_params.max_len   = PAGE_SIZE;
+		pp_params.queue     = __netif_get_rx_queue(rq->netdev, rq->ix);
 
 		/* page_pool can be used even when there is no rq->xdp_prog,
 		 * given page_pool does not handle DMA mapping there is no
@@ -2801,6 +2803,7 @@ int mlx5e_open_channels(struct mlx5e_priv *priv,
 	int err = -ENOMEM;
 	int i;
 
+	// NOTE: during switch, chs->params is NEW params
 	chs->num = chs->params.num_channels;
 
 	chs->c = kcalloc(chs->num, sizeof(struct mlx5e_channel *), GFP_KERNEL);
@@ -2808,6 +2811,8 @@ int mlx5e_open_channels(struct mlx5e_priv *priv,
 	if (!chs->c || !cparam)
 		goto err_free;
 
+	// NOTE: build out new cparam just allocated
+	// only used within this func scope
 	err = mlx5e_build_channel_param(priv->mdev, &chs->params, cparam);
 	if (err)
 		goto err_free;
@@ -2818,11 +2823,14 @@ int mlx5e_open_channels(struct mlx5e_priv *priv,
 		if (chs->params.xdp_prog)
 			xsk_pool = mlx5e_xsk_get_pool(&chs->params, chs->params.xsk, i);
 
+		// NOTE: chs->params and cparams are both new, xsk_pool is existing (unless changed)
+		// cp is OUT param
 		err = mlx5e_open_channel(priv, i, &chs->params, cparam, xsk_pool, &chs->c[i]);
 		if (err)
 			goto err_close_channels;
 	}
 
+	// TODO: NYI
 	if (MLX5E_GET_PFLAG(&chs->params, MLX5E_PFLAG_TX_PORT_TS) || chs->params.ptp_rx) {
 		err = mlx5e_ptp_open(priv, &chs->params, chs->c[0]->lag_port, &chs->ptp);
 		if (err)
@@ -3267,6 +3275,7 @@ static int mlx5e_switch_priv_channels(struct mlx5e_priv *priv,
 	int carrier_ok;
 	int err = 0;
 
+	// NOTE: stop?
 	carrier_ok = netif_carrier_ok(netdev);
 	netif_carrier_off(netdev);
 
@@ -3300,6 +3309,7 @@ out:
 	return err;
 }
 
+// NOTE: new params is always a copy of existing, plus changes
 int mlx5e_safe_switch_params(struct mlx5e_priv *priv,
 			     struct mlx5e_params *params,
 			     mlx5e_fp_preactivate preactivate,
@@ -4047,9 +4057,11 @@ static int set_feature_hw_gro(struct net_device *netdev, bool enable)
 	*/
 
 	if (enable) {
+		printk("----- set_feature_hw_gro: setting merge type to MLX5E_PACKET_MERGE_SHAMPO and shampo_hds_only=false\n");
 		new_params.packet_merge.type = MLX5E_PACKET_MERGE_SHAMPO;
 		new_params.packet_merge.shampo_hds_only = false;
 	} else if (new_params.packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO) {
+		printk("----- set_feature_hw_gro: setting merge type to MLX5E_PACKET_MERGE_NONE\n");
 		new_params.packet_merge.type = MLX5E_PACKET_MERGE_NONE;
 	} else {
 		goto out;
@@ -6343,6 +6355,40 @@ void mlx5e_netdev_attach_nic_profile(struct mlx5e_priv *priv)
 	mlx5e_netdev_change_profile(priv, &mlx5e_nic_profile, NULL);
 }
 
+static int mlx5e_queue_mem_alloc(struct net_device *dev, void *qmem, int idx)
+{
+	struct mlx5e_priv *priv = netdev_priv(dev);
+
+	mutex_lock(&priv->state_lock);
+	mlx5e_safe_reopen_channels(priv);
+	mutex_unlock(&priv->state_lock);
+
+	return 0;
+}
+
+static void mlx5e_queue_mem_free(struct net_device *dev, void *qmem)
+{
+
+}
+
+static int mlx5e_queue_start(struct net_device *dev, void *qmem, int idx)
+{
+	return 0;
+}
+
+static int mlx5e_queue_stop(struct net_device *dev, void *qmem, int idx)
+{
+	return 0;
+}
+
+static const struct netdev_queue_mgmt_ops mlx5e_queue_mgmt_ops = {
+	.ndo_queue_mem_size	= sizeof(struct mlx5e_channels),
+	.ndo_queue_mem_alloc	= mlx5e_queue_mem_alloc,
+	.ndo_queue_mem_free	= mlx5e_queue_mem_free,
+	.ndo_queue_start	= mlx5e_queue_start,
+	.ndo_queue_stop		= mlx5e_queue_stop,
+};
+
 void mlx5e_destroy_netdev(struct mlx5e_priv *priv)
 {
 	struct net_device *netdev = priv->netdev;
@@ -6486,6 +6532,8 @@ static int _mlx5e_probe(struct auxiliary_device *adev)
 		mlx5_core_err(mdev, "_mlx5e_resume failed, %d\n", err);
 		goto err_profile_cleanup;
 	}
+
+	netdev->queue_mgmt_ops = &mlx5e_queue_mgmt_ops;
 
 	err = register_netdev(netdev);
 	if (err) {

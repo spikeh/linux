@@ -545,6 +545,7 @@ struct mlx5e_icosq {
 
 struct mlx5e_frag_page {
 	struct page *page;
+	netmem_ref netmem;
 	u16 frags;
 };
 

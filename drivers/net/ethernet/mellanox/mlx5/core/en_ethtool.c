@@ -405,9 +405,11 @@ int mlx5e_ethtool_set_ringparam(struct mlx5e_priv *priv,
 	new_params.log_sq_size = log_sq_size;
 
 	if (kernel_param->tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
+		printk("----- mlx5e_ethtool_set_ringparam: setting merge type to MLX5E_PACKET_MERGE_SHAMPO and shampo_hds_only=true\n");
 		new_params.packet_merge.type = MLX5E_PACKET_MERGE_SHAMPO;
 		new_params.packet_merge.shampo_hds_only = true;
 	} else {
+		printk("----- mlx5e_ethtool_set_ringparam: setting merge type to MLX5E_PACKET_MERGE_NONE and shampo_hds_only=false\n");
 		new_params.packet_merge.type = MLX5E_PACKET_MERGE_NONE;
 		new_params.packet_merge.shampo_hds_only = false;
 	}

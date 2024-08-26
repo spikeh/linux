@@ -42,6 +42,7 @@
 #include <net/udp.h>
 #include <net/tcp.h>
 #include <net/xdp_sock_drv.h>
+#include <linux/io_uring/net.h>
 #include "en.h"
 #include "en/txrx.h"
 #include "en_tc.h"
@@ -276,16 +277,18 @@ static inline u32 mlx5e_decompress_cqes_start(struct mlx5e_rq *rq,
 static int mlx5e_page_alloc_fragmented(struct page_pool *pool,
 				       struct mlx5e_frag_page *frag_page)
 {
-	struct page *page;
+	netmem_ref netmem;
 
-	page = page_pool_dev_alloc_pages(pool);
-	if (unlikely(!page))
+	netmem = page_pool_alloc_netmem(pool, GFP_ATOMIC | __GFP_NOWARN);
+	if (unlikely(!netmem))
 		return -ENOMEM;
 
-	page_pool_fragment_page(page, MLX5E_PAGECNT_BIAS_MAX);
+	page_pool_fragment_netmem(netmem, MLX5E_PAGECNT_BIAS_MAX);
 
+	// NOTE: page is a netmem, helpers already convert page to netmem
 	*frag_page = (struct mlx5e_frag_page) {
-		.page	= page,
+		.page	= (__force struct page *)netmem,
+		.netmem = netmem,
 		.frags	= 0,
 	};
 
@@ -533,13 +536,27 @@ mlx5e_add_skb_frag(struct mlx5e_rq *rq, struct sk_buff *skb,
 	dma_sync_single_for_cpu(rq->pdev, addr + frag_offset, len,
 				rq->buff.map_dir);
 
-	if (skb_can_coalesce(skb, next_frag, frag_page->page, frag_offset)) {
-		skb_coalesce_rx_frag(skb, next_frag - 1, len, truesize);
-	} else {
-		frag_page->frags++;
-		skb_add_rx_frag(skb, next_frag, frag_page->page,
-				frag_offset, len, truesize);
-	}
+	// NOTE: skb_coalesce_rx_frag does not support netmem
+	frag_page->frags++;
+	skb_add_rx_frag(skb, next_frag, frag_page->page,
+			frag_offset, len, truesize);
+}
+
+// TODO: make these generic for page and dmabuf net iovs
+static inline void *net_iov_address_get(netmem_ref netmem)
+{
+	if (!netmem_is_net_iov(netmem))
+		return page_address(netmem_to_page(netmem));
+
+	return kmap_local_page(io_iov_get_page(netmem));
+}
+
+static inline void net_iov_address_put(netmem_ref netmem, const void *va)
+{
+	if (!netmem_is_net_iov(netmem))
+		return;
+
+	kunmap_local(va);
 }
 
 static inline void
@@ -547,13 +564,14 @@ mlx5e_copy_skb_header(struct mlx5e_rq *rq, struct sk_buff *skb,
 		      struct page *page, dma_addr_t addr,
 		      int offset_from, int dma_offset, u32 headlen)
 {
-	const void *from = page_address(page) + offset_from;
+	const void *from = net_iov_address_get(page_to_netmem(page));
 	/* Aligning len to sizeof(long) optimizes memcpy performance */
 	unsigned int len = ALIGN(headlen, sizeof(long));
 
 	dma_sync_single_for_cpu(rq->pdev, addr + dma_offset, len,
 				rq->buff.map_dir);
-	skb_copy_to_linear_data(skb, from, len);
+	skb_copy_to_linear_data(skb, from + offset_from, len);
+	net_iov_address_put(page_to_netmem(page), from);
 }
 
 static void
@@ -678,6 +696,7 @@ static int mlx5e_build_shampo_hd_umr(struct mlx5e_rq *rq,
 			page_index = (page_index + 1) & (shampo->hd_per_wq - 1);
 			frag_page = &shampo->pages[page_index];
 
+			// TODO: hds_page_pool used!
 			err = mlx5e_page_alloc_fragmented(rq->hds_page_pool, frag_page);
 			if (unlikely(err))
 				goto err_unmap;
@@ -1216,6 +1235,9 @@ static void *mlx5e_shampo_get_packet_hd(struct mlx5e_rq *rq, u16 header_index)
 	struct mlx5e_dma_info *last_head = &rq->mpwqe.shampo->info[header_index];
 	u16 head_offset = (last_head->addr & (PAGE_SIZE - 1)) + rq->buff.headroom;
 
+	// NOTE: HW GRO doesn't support ZC RX and header split
+	// netmem is guaranteed to not be net_iov
+	WARN_ON(netmem_is_net_iov(page_to_netmem(last_head->frag_page->page)));
 	return page_address(last_head->frag_page->page) + head_offset;
 }
 
@@ -1677,6 +1699,9 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi,
 	dma_addr_t addr;
 	u32 frag_size;
 
+	// NOTE: legacy RQ doesn't support ZC RX and header split
+	// netmem is guaranteed to not be net_iov
+	WARN_ON(netmem_is_net_iov(page_to_netmem(frag_page->page)));
 	va             = page_address(frag_page->page) + wi->offset;
 	data           = va + rx_headroom;
 	frag_size      = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
@@ -1731,6 +1756,7 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi
 
 	frag_page = wi->frag_page;
 
+	WARN_ON(netmem_is_net_iov(page_to_netmem(frag_page->page)));
 	va = page_address(frag_page->page) + wi->offset;
 	frag_consumed_bytes = min_t(u32, frag_info->frag_size, cqe_bcnt);
 
@@ -1960,17 +1986,23 @@ const struct mlx5e_rx_handlers mlx5e_rx_handlers_rep = {
 #endif
 
 static void
-mlx5e_shampo_fill_skb_data(struct sk_buff *skb, struct mlx5e_rq *rq,
-			   struct mlx5e_frag_page *frag_page,
-			   u32 data_bcnt, u32 data_offset)
+mlx5e_fill_skb_data(struct sk_buff *skb, struct mlx5e_rq *rq,
+		    struct mlx5e_frag_page *frag_page,
+		    u32 data_bcnt, u32 data_offset)
 {
 	net_prefetchw(skb->data);
 
 	do {
 		/* Non-linear mode, hence non-XSK, which always uses PAGE_SIZE. */
 		u32 pg_consumed_bytes = min_t(u32, PAGE_SIZE - data_offset, data_bcnt);
-		unsigned int truesize = pg_consumed_bytes;
+		unsigned int truesize;
 
+		if (test_bit(MLX5E_RQ_STATE_SHAMPO, &rq->state))
+			truesize = pg_consumed_bytes;
+		else
+			truesize = ALIGN(pg_consumed_bytes, BIT(rq->mpwqe.log_stride_sz));
+
+		frag_page->frags++;
 		mlx5e_add_skb_frag(rq, skb, frag_page, data_offset,
 				   pg_consumed_bytes, truesize);
 
@@ -2004,11 +2036,14 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 
 	if (prog) {
 		/* area for bpf_xdp_[store|load]_bytes */
-		net_prefetchw(page_address(frag_page->page) + frag_offset);
+		if (!netmem_is_net_iov(page_to_netmem(frag_page->page)))
+			net_prefetchw(page_address(frag_page->page) + frag_offset);
 		if (unlikely(mlx5e_page_alloc_fragmented(rq->page_pool, &wi->linear_page))) {
 			rq->stats->buff_alloc_err++;
 			return NULL;
 		}
+		// NOTE: cannot be net_iov
+		WARN_ON(netmem_is_net_iov(page_to_netmem(frag_page->page)));
 		va = page_address(wi->linear_page.page);
 		net_prefetchw(va); /* xdp_frame data area */
 		linear_hr = XDP_PACKET_HEADROOM;
@@ -2145,6 +2180,7 @@ mlx5e_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 		return NULL;
 	}
 
+	WARN_ON(netmem_is_net_iov(page_to_netmem(frag_page->page)));
 	va             = page_address(frag_page->page) + head_offset;
 	data           = va + rx_headroom;
 	frag_size      = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
@@ -2192,10 +2228,13 @@ mlx5e_skb_from_cqe_shampo(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 	u16 head_size = cqe->shampo.header_size;
 	u16 rx_headroom = rq->buff.headroom;
 	struct sk_buff *skb = NULL;
-	void *hdr, *data;
+	void *hdr_base, *hdr, *data;
 	u32 frag_size;
+	netmem_ref netmem;
 
-	hdr		= page_address(head->frag_page->page) + head_offset;
+	netmem		= page_to_netmem(head->frag_page->page);
+	hdr_base	= net_iov_address_get(netmem);
+	hdr		= hdr_base + head_offset;
 	data		= hdr + rx_headroom;
 	frag_size	= MLX5_SKB_FRAG_SZ(rx_headroom + head_size);
 
@@ -2205,6 +2244,7 @@ mlx5e_skb_from_cqe_shampo(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 		net_prefetchw(hdr);
 		net_prefetch(data);
 		skb = mlx5e_build_linear_skb(rq, hdr, frag_size, rx_headroom, head_size, 0);
+		net_iov_address_put(netmem, hdr_base);
 
 		if (unlikely(!skb))
 			return NULL;
@@ -2309,6 +2349,7 @@ static void mlx5e_handle_rx_cqe_mpwrq_shampo(struct mlx5e_rq *rq, struct mlx5_cq
 		goto mpwrq_cqe_out;
 	}
 
+	// NOTE: HDS mode only, no HW GRO
 	if (test_bit(MLX5E_RQ_STATE_HDS_ONLY, &rq->state)) {
 		struct sk_buff *skb;
 
@@ -2319,7 +2360,9 @@ static void mlx5e_handle_rx_cqe_mpwrq_shampo(struct mlx5e_rq *rq, struct mlx5_cq
 			if (unlikely(!skb))
 				goto free_hd_entry;
 			frag_page = &wi->alloc_units.frag_pages[page_idx];
-			mlx5e_shampo_fill_skb_data(skb, rq, frag_page, data_bcnt, data_offset);
+			// FIXME: this is triggering
+			// DMA-API: mlx5_core 0000:01:00.0: device driver tries to sync DMA memory it has not allocated [device address=0x00000001eb945000] [size=0 bytes]
+			mlx5e_fill_skb_data(skb, rq, frag_page, data_bcnt, data_offset);
 			stats->hds_only++;
 		} else {
 			skb = mlx5e_skb_from_cqe_mpwrq_nonlinear(rq, wi, cqe, cqe_bcnt,
@@ -2371,7 +2414,7 @@ static void mlx5e_handle_rx_cqe_mpwrq_shampo(struct mlx5e_rq *rq, struct mlx5_cq
 			struct mlx5e_frag_page *frag_page;
 
 			frag_page = &wi->alloc_units.frag_pages[page_idx];
-			mlx5e_shampo_fill_skb_data(*skb, rq, frag_page, data_bcnt, data_offset);
+			mlx5e_fill_skb_data(*skb, rq, frag_page, data_bcnt, data_offset);
 		} else {
 			stats->hds_nodata_packets++;
 			stats->hds_nodata_bytes += head_size;
