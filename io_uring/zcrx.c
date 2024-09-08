@@ -734,6 +734,7 @@ static int io_zcrx_recv_frag(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 		if (!io_zcrx_queue_cqe(req, niov, ifq, off, len))
 			return -ENOSPC;
 		io_zcrx_get_buf_uref(niov);
+		napi_pp_put_page(net_iov_to_netmem(niov));
 	} else {
 		struct page *page = skb_frag_page(frag);
 		u32 p_off, p_len, t, copied = 0;
