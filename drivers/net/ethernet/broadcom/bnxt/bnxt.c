@@ -1240,6 +1240,7 @@ static u32 __bnxt_rx_agg_pages(struct bnxt *bp,
 		cons_rx_buf = &rxr->rx_agg_ring[cons];
 		skb_frag_fill_page_desc(frag, cons_rx_buf->page,
 					cons_rx_buf->offset, frag_len);
+		// NOTE: sets frag->netmem and frag->offset and frag->len
 		shinfo->nr_frags = i + 1;
 		__clear_bit(cons, rxr->rx_agg_bmap);
 
@@ -1290,6 +1291,12 @@ static struct sk_buff *bnxt_rx_agg_pages_skb(struct bnxt *bp,
 		skb_mark_for_recycle(skb);
 		dev_kfree_skb(skb);
 		return NULL;
+	}
+	if (agg_bufs > 0) {
+		// check first frag
+		skb_frag_t *frag = &shinfo->frags[0];
+		if (netmem_is_net_iov(frag->netmem))
+			skb->unreadable = true;
 	}
 
 	skb->data_len += total_frag_len;
