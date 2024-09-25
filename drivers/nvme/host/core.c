@@ -1922,7 +1922,7 @@ static void nvme_configure_metadata(struct nvme_ctrl *ctrl,
 	if (head->pi_size && head->ms >= head->pi_size)
 		head->pi_type = id->dps & NVME_NS_DPS_PI_MASK;
 	if (!(id->dps & NVME_NS_DPS_PI_FIRST))
-		info->pi_offset = head->ms - head->pi_size;
+		head->pi_type = 0;
 
 	if (ctrl->ops->flags & NVME_F_FABRICS) {
 		/*
