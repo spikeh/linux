@@ -94,6 +94,7 @@ struct io_recvzc {
 	struct file			*file;
 	unsigned			msg_flags;
 	u16				flags;
+	u32				len;
 };
 
 int io_shutdown_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -764,6 +765,7 @@ static int io_recvmsg_prep_setup(struct io_kiocb *req)
 		kmsg->msg.msg_ubuf = NULL;
 
 		if (!io_do_buffer_select(req)) {
+			// NOTE: sr->len is encoded in the iterator
 			ret = import_ubuf(ITER_DEST, sr->buf, sr->len,
 					  &kmsg->msg.msg_iter);
 			if (unlikely(ret))
@@ -1215,19 +1217,30 @@ int io_recvzc_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 
 	if (unlikely(sqe->file_index || sqe->addr2))
 		return -EINVAL;
-	if (READ_ONCE(sqe->len) || READ_ONCE(sqe->addr3))
+	if (READ_ONCE(sqe->addr3))
 		return -EINVAL;
 
-	/* All data completions are posted as aux CQEs. */
-	req->flags |= REQ_F_APOLL_MULTISHOT;
+	zc->len = READ_ONCE(sqe->len);
+	if (zc->len == UINT_MAX)
+		return -EINVAL;
+	// NOTE: 0 or positive
 
+	/* All data completions are posted as aux CQEs. */
 	zc->flags = READ_ONCE(sqe->ioprio);
+	if (zc->flags & IORING_RECV_MULTISHOT) {
+		if (zc->len)
+			return -EINVAL;
+		req->flags |= REQ_F_APOLL_MULTISHOT;
+	}
 	zc->msg_flags = READ_ONCE(sqe->msg_flags);
 	if (zc->msg_flags)
 		return -EINVAL;
 	if (zc->flags & ~RECVMSG_FLAGS)
 		return -EINVAL;
 
+	// NOTE: turn 0 into UINT_MAX for not set
+	if (!zc->len)
+		zc->len = UINT_MAX;
 #ifdef CONFIG_COMPAT
 	if (req->ctx->compat)
 		zc->msg_flags |= MSG_CMSG_COMPAT;
@@ -1254,10 +1267,12 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 		return -EINVAL;
 
 	ret = io_zcrx_recv(req, ifq, sock, zc->msg_flags | MSG_DONTWAIT,
-			   issue_flags);
-	if (unlikely(ret <= 0) && ret != -EAGAIN) {
+			   issue_flags, zc->len);
+	if (unlikely(ret <= 0)) {
 		if (ret == -ERESTARTSYS)
 			ret = -EINTR;
+		if (ret == -EAGAIN)
+			return ret;
 		if (ret == IOU_REQUEUE)
 			return IOU_REQUEUE;
 
@@ -1269,6 +1284,12 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 		return IOU_OK;
 	}
 
+	// NOTE: 0 cflags i.e. without MORE means req is done
+	// FIXME: how to get the actual nr of read bytes?
+	if (zc->len != UINT_MAX) {
+		io_req_set_res(req, ret, 0);
+		return IOU_OK;
+	}
 	if (issue_flags & IO_URING_F_MULTISHOT)
 		return IOU_ISSUE_SKIP_COMPLETE;
 	return -EAGAIN;

@@ -31,6 +31,7 @@ struct io_zcrx_args {
 	struct io_zcrx_ifq	*ifq;
 	struct socket		*sock;
 	unsigned		nr_skbs;
+	unsigned long		len;
 };
 
 struct io_zc_refill_data {
@@ -669,6 +670,7 @@ static bool io_zcrx_queue_cqe(struct io_kiocb *req, struct net_iov *niov,
 
 	cqe->user_data = req->cqe.user_data;
 	cqe->res = len;
+	// FIXME: don't always set this
 	cqe->flags = IORING_CQE_F_MORE;
 
 	area = io_zcrx_iov_to_area(niov);
@@ -734,7 +736,8 @@ static int io_zcrx_recv_frag(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 		if (!io_zcrx_queue_cqe(req, niov, ifq, off, len))
 			return -ENOSPC;
 		io_zcrx_get_buf_uref(niov);
-		napi_pp_put_page(net_iov_to_netmem(niov));
+		// FIXME: do not turn this on for bnxt
+		//napi_pp_put_page(net_iov_to_netmem(niov));
 	} else {
 		struct page *page = skb_frag_page(frag);
 		u32 p_off, p_len, t, copied = 0;
@@ -768,6 +771,13 @@ io_zcrx_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 	unsigned start, start_off = offset;
 	int i, copy, end, off;
 	int ret = 0;
+	// NOTE: `len` = skb->len - (tcp_sock->copied_seq - TCP_SKB_CB(skb)->seq)
+	// which is the amount of bytes left in this skb that has not been copied yet
+	unsigned long readlen = args->len;
+	// NOTE: `offset` = (tcp_sock->copied_seq - TCP_SKB_CB(skb)->seq)
+	if (args->len == 0)
+		return -EINTR;
+	len = (args->len != UINT_MAX) ? min_t(size_t, len, args->len) : len;
 
 	if (unlikely(args->nr_skbs++ > IO_SKBS_PER_CALL_LIMIT))
 		return -EAGAIN;
@@ -802,10 +812,12 @@ io_zcrx_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 		end = start + skb_frag_size(frag);
 
 		if (offset < end) {
+			// NOTE: this frag contains the offset
 			copy = end - offset;
 			if (copy > len)
 				copy = len;
 
+			// NOTE: calculate offset relative to the start of this frag
 			off = offset - start;
 			ret = io_zcrx_recv_frag(req, ifq, frag, off, copy);
 			if (ret < 0)
@@ -845,17 +857,21 @@ io_zcrx_recv_skb(read_descriptor_t *desc, struct sk_buff *skb,
 out:
 	if (offset == start_off)
 		return ret;
+	args->len -= (offset - start_off);
+	if (args->len == 0)
+		desc->count = 0;
 	return offset - start_off;
 }
 
 static int io_zcrx_tcp_recvmsg(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 				struct sock *sk, int flags,
-				unsigned int issue_flags)
+				unsigned int issue_flags, unsigned long len)
 {
 	struct io_zcrx_args args = {
 		.req = req,
 		.ifq = ifq,
 		.sock = sk->sk_socket,
+		.len = len,
 	};
 	read_descriptor_t rd_desc = {
 		.count = 1,
@@ -885,12 +901,13 @@ static int io_zcrx_tcp_recvmsg(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 	}
 out:
 	release_sock(sk);
+	//printk("----- io_zcrx_tcp_recvmsg: ret=%d\n", ret);
 	return ret;
 }
 
 int io_zcrx_recv(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 		 struct socket *sock, unsigned int flags,
-		 unsigned int issue_flags)
+		 unsigned int issue_flags, unsigned long len)
 {
 	struct sock *sk = sock->sk;
 	const struct proto *prot = READ_ONCE(sk->sk_prot);
@@ -899,7 +916,7 @@ int io_zcrx_recv(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 		return -EPROTONOSUPPORT;
 
 	sock_rps_record_flow(sk);
-	return io_zcrx_tcp_recvmsg(req, ifq, sk, flags, issue_flags);
+	return io_zcrx_tcp_recvmsg(req, ifq, sk, flags, issue_flags, len);
 }
 
 struct page *io_iov_get_page(netmem_ref netmem)

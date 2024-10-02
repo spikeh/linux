@@ -1607,24 +1607,33 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 			 * while aggregating skbs from the socket queue.
 			 */
 			skb = tcp_recv_skb(sk, seq - 1, &offset);
-			if (!skb)
+			if (!skb) {
+				//printk("----- tcp_read_sock: break out due to !skb from tcp_recv_skb()\n");
 				break;
+			}
 			/* TCP coalescing might have appended data to the skb.
 			 * Try to splice more frags
 			 */
-			if (offset + 1 != skb->len)
+			if (offset + 1 != skb->len) {
+				//printk("----- tcp_read_sock: offset (%u) + 1 != skb->len (%u), continue\n", offset, skb->len);
 				continue;
+			}
 		}
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) {
 			tcp_eat_recv_skb(sk, skb);
 			++seq;
+			//printk("----- tcp_read_sock: break out due to TCPHDR_FUN\n");
 			break;
 		}
 		tcp_eat_recv_skb(sk, skb);
-		if (!desc->count)
+		if (!desc->count) {
+			//printk("----- tcp_read_sock: break out due to !desc->count\n");
 			break;
+		}
+		//printk("----- tcp_read_sock: set tcp->copied_seq to seq=%u\n", seq);
 		WRITE_ONCE(tp->copied_seq, seq);
 	}
+	//printk("----- tcp_read_sock: out of while loop\n");
 	WRITE_ONCE(tp->copied_seq, seq);
 
 	tcp_rcv_space_adjust(sk);
@@ -1634,6 +1643,7 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 		tcp_recv_skb(sk, seq, &offset);
 		tcp_cleanup_rbuf(sk, copied);
 	}
+	//printk("----- tcp_read_sock: returning copied=%d\n", copied);
 	return copied;
 }
 EXPORT_SYMBOL(tcp_read_sock);
