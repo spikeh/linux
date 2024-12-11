@@ -157,6 +157,7 @@ struct memory_provider_ops {
 	bool (*release_netmem)(struct page_pool *pool, netmem_ref netmem);
 	int (*init)(struct page_pool *pool);
 	void (*destroy)(struct page_pool *pool);
+	int (*nl_report)(const struct page_pool *pool, struct sk_buff *rsp);
 };
 
 struct pp_memory_provider_params {
