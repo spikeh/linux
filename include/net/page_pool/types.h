@@ -152,12 +152,15 @@ struct page_pool_stats {
  */
 #define PAGE_POOL_FRAG_GROUP_ALIGN	(4 * sizeof(long))
 
+struct netdev_rx_queue;
+
 struct memory_provider_ops {
 	netmem_ref (*alloc_netmems)(struct page_pool *pool, gfp_t gfp);
 	bool (*release_netmem)(struct page_pool *pool, netmem_ref netmem);
 	int (*init)(struct page_pool *pool);
 	void (*destroy)(struct page_pool *pool);
 	int (*nl_report)(const struct page_pool *pool, struct sk_buff *rsp);
+	void (*uninstall)(void *mp_priv, struct netdev_rx_queue *rxq);
 };
 
 struct pp_memory_provider_params {
