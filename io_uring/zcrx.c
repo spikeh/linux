@@ -58,23 +58,16 @@ static int io_zcrx_map_area(struct io_zcrx_ifq *ifq, struct io_zcrx_area *area)
 	struct device *dev = ifq->dev->dev.parent;
 	int i;
 
-	// if (!get_dma_ops(dev))
-	// 	return -EINVAL;
-
 	for (i = 0; i < area->nia.num_niovs; i++) {
 		struct net_iov *niov = &area->nia.niovs[i];
 		dma_addr_t dma = 0;
-
-		if (!get_dma_ops(dev))
-			goto do_set;
 
 		dma = dma_map_page_attrs(dev, area->pages[i], 0, PAGE_SIZE,
 					 DMA_FROM_DEVICE, IO_DMA_ATTR);
 		if (dma_mapping_error(dev, dma))
 			break;
 
-do_set:
-		if (!page_pool_set_dma_addr_netmem(net_iov_to_netmem(niov), dma)) {
+		if (page_pool_set_dma_addr_netmem(net_iov_to_netmem(niov), dma)) {
 			dma_unmap_page_attrs(dev, dma, PAGE_SIZE,
 					     DMA_FROM_DEVICE, IO_DMA_ATTR);
 			break;
