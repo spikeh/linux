@@ -522,8 +522,6 @@ static void io_zcrx_ring_refill(struct page_pool *pp,
 	unsigned int entries;
 	netmem_ref netmem;
 
-	lockdep_assert_in_softirq();
-
 	spin_lock(&ifq->rq_lock);
 
 	entries = io_zcrx_rqring_entries(ifq);
