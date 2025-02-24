@@ -23,6 +23,9 @@
 #include "poll.h"
 #include "rw.h"
 
+static void io_complete_rw(struct kiocb *kiocb, long res);
+static void io_complete_rw_iopoll(struct kiocb *kiocb, long res);
+
 struct io_rw {
 	/* NOTE: kiocb has the file as the first member, so don't do it here */
 	struct kiocb			kiocb;
@@ -46,24 +49,16 @@ static bool io_file_supports_nowait(struct io_kiocb *req, __poll_t mask)
 	return false;
 }
 
-#ifdef CONFIG_COMPAT
 static int io_iov_compat_buffer_select_prep(struct io_rw *rw)
 {
-	struct compat_iovec __user *uiov;
-	compat_ssize_t clen;
+	struct compat_iovec __user *uiov = u64_to_user_ptr(rw->addr);
+	struct compat_iovec iov;
 
-	uiov = u64_to_user_ptr(rw->addr);
-	if (!access_ok(uiov, sizeof(*uiov)))
+	if (copy_from_user(&iov, uiov, sizeof(iov)))
 		return -EFAULT;
-	if (__get_user(clen, &uiov->iov_len))
-		return -EFAULT;
-	if (clen < 0)
-		return -EINVAL;
-
-	rw->len = clen;
+	rw->len = iov.iov_len;
 	return 0;
 }
-#endif
 
 static int io_iov_buffer_select_prep(struct io_kiocb *req)
 {
@@ -74,10 +69,8 @@ static int io_iov_buffer_select_prep(struct io_kiocb *req)
 	if (rw->len != 1)
 		return -EINVAL;
 
-#ifdef CONFIG_COMPAT
-	if (req->ctx->compat)
+	if (io_is_compat(req->ctx))
 		return io_iov_compat_buffer_select_prep(rw);
-#endif
 
 	uiov = u64_to_user_ptr(rw->addr);
 	if (copy_from_user(&iov, uiov, sizeof(*uiov)))
@@ -120,7 +113,7 @@ static int __io_import_iovec(int ddir, struct io_kiocb *req,
 		nr_segs = 1;
 	}
 	ret = __import_iovec(ddir, buf, sqe_len, nr_segs, &iov, &io->iter,
-				req->ctx->compat);
+				io_is_compat(req->ctx));
 	if (unlikely(ret < 0))
 		return ret;
 	if (iov) {
@@ -288,6 +281,11 @@ static int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 	}
 	rw->kiocb.dio_complete = NULL;
 	rw->kiocb.ki_flags = 0;
+
+	if (req->ctx->flags & IORING_SETUP_IOPOLL)
+		rw->kiocb.ki_complete = io_complete_rw_iopoll;
+	else
+		rw->kiocb.ki_complete = io_complete_rw;
 
 	rw->addr = READ_ONCE(sqe->addr);
 	rw->len = READ_ONCE(sqe->len);
@@ -511,7 +509,7 @@ static inline int io_fixup_rw_res(struct io_kiocb *req, long res)
 	return res;
 }
 
-void io_req_rw_complete(struct io_kiocb *req, struct io_tw_state *ts)
+void io_req_rw_complete(struct io_kiocb *req, io_tw_token_t tw)
 {
 	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
 	struct kiocb *kiocb = &rw->kiocb;
@@ -528,7 +526,7 @@ void io_req_rw_complete(struct io_kiocb *req, struct io_tw_state *ts)
 		req->cqe.flags |= io_put_kbuf(req, req->cqe.res, 0);
 
 	io_req_rw_cleanup(req, 0);
-	io_req_task_complete(req, ts);
+	io_req_task_complete(req, tw);
 }
 
 static void io_complete_rw(struct kiocb *kiocb, long res)
@@ -563,8 +561,10 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
 	smp_store_release(&req->iopoll_completed, 1);
 }
 
-static inline void io_rw_done(struct kiocb *kiocb, ssize_t ret)
+static inline void io_rw_done(struct io_kiocb *req, ssize_t ret)
 {
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+
 	/* IO was queued async, completion will happen later */
 	if (ret == -EIOCBQUEUED)
 		return;
@@ -586,8 +586,10 @@ static inline void io_rw_done(struct kiocb *kiocb, ssize_t ret)
 		}
 	}
 
-	INDIRECT_CALL_2(kiocb->ki_complete, io_complete_rw_iopoll,
-			io_complete_rw, kiocb, ret);
+	if (req->ctx->flags & IORING_SETUP_IOPOLL)
+		io_complete_rw_iopoll(&rw->kiocb, ret);
+	else
+		io_complete_rw(&rw->kiocb, ret);
 }
 
 static int kiocb_done(struct io_kiocb *req, ssize_t ret,
@@ -598,7 +600,7 @@ static int kiocb_done(struct io_kiocb *req, ssize_t ret,
 
 	if (ret >= 0 && req->flags & REQ_F_CUR_POS)
 		req->file->f_pos = rw->kiocb.ki_pos;
-	if (ret >= 0 && (rw->kiocb.ki_complete == io_complete_rw)) {
+	if (ret >= 0 && !(req->ctx->flags & IORING_SETUP_IOPOLL)) {
 		__io_complete_rw_common(req, ret);
 		/*
 		 * Safe to call io_end from here as we're inline
@@ -609,7 +611,7 @@ static int kiocb_done(struct io_kiocb *req, ssize_t ret,
 		io_req_rw_cleanup(req, issue_flags);
 		return IOU_OK;
 	} else {
-		io_rw_done(&rw->kiocb, ret);
+		io_rw_done(req, ret);
 	}
 
 	return IOU_ISSUE_SKIP_COMPLETE;
@@ -813,10 +815,8 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode, int rw_type)
 	if (ctx->flags & IORING_SETUP_IOPOLL) {
 		if (!(kiocb->ki_flags & IOCB_DIRECT) || !file->f_op->iopoll)
 			return -EOPNOTSUPP;
-
 		kiocb->private = NULL;
 		kiocb->ki_flags |= IOCB_HIPRI;
-		kiocb->ki_complete = io_complete_rw_iopoll;
 		req->iopoll_completed = 0;
 		if (ctx->flags & IORING_SETUP_HYBRID_IOPOLL) {
 			/* make sure every req only blocks once*/
@@ -826,7 +826,6 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode, int rw_type)
 	} else {
 		if (kiocb->ki_flags & IOCB_HIPRI)
 			return -EINVAL;
-		kiocb->ki_complete = io_complete_rw;
 	}
 
 	if (req->flags & REQ_F_HAS_METADATA) {
@@ -904,7 +903,8 @@ static int __io_read(struct io_kiocb *req, unsigned int issue_flags)
 	} else if (ret == -EIOCBQUEUED) {
 		return IOU_ISSUE_SKIP_COMPLETE;
 	} else if (ret == req->cqe.res || ret <= 0 || !force_nonblock ||
-		   (req->flags & REQ_F_NOWAIT) || !need_complete_io(req)) {
+		   (req->flags & REQ_F_NOWAIT) || !need_complete_io(req) ||
+		   (issue_flags & IO_URING_F_MULTISHOT)) {
 		/* read all, failed, already did sync or don't want to retry */
 		goto done;
 	}
@@ -977,6 +977,8 @@ int io_read_mshot(struct io_kiocb *req, unsigned int issue_flags)
 	if (!io_file_can_poll(req))
 		return -EBADFD;
 
+	/* make it sync, multishot doesn't support async execution */
+	rw->kiocb.ki_complete = NULL;
 	ret = __io_read(req, issue_flags);
 
 	/*
