@@ -1104,6 +1104,10 @@ struct fuse_io_args {
 			struct fuse_write_out out;
 			bool folio_locked;
 		} write;
+		struct {
+			struct fuse_zc_write_in in;
+			struct fuse_zc_write_out out;
+		} zc_write;
 	};
 	struct fuse_args_pages ap;
 	struct fuse_io_priv *io;

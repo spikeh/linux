@@ -649,6 +649,7 @@ enum fuse_opcode {
 	FUSE_SYNCFS		= 50,
 	FUSE_TMPFILE		= 51,
 	FUSE_STATX		= 52,
+	FUSE_ZC_WRITE		= 53,
 
 	/* CUSE specific operations */
 	CUSE_INIT		= 4096,
@@ -992,6 +993,37 @@ struct fuse_fallocate_in {
 	uint32_t	padding;
 };
 
+struct fuse_zc_write_in {
+	uint64_t	fh;
+	uint64_t	offset;
+	uint32_t	size;
+	uint32_t	write_flags;
+	uint64_t	lock_owner;
+	uint32_t	flags;
+	uint16_t	shmfd;
+	uint16_t	padding;
+};
+
+struct fuse_zc_write_out {
+	uint32_t	size;
+	uint32_t	padding;
+};
+
+// TODO: (davidhwei) check the size with pahole
+#define FUSE_COMPAT_URING_IN_SIZE 28
+
+struct fuse_uring_in {
+	union {
+		struct fuse_zc_write_in zc_write;
+	};
+};
+
+struct fuse_uring_out {
+	union {
+		struct fuse_zc_write_out zc_write;
+	};
+};
+
 /**
  * FUSE request unique ID flag
  *
@@ -1254,7 +1286,7 @@ struct fuse_uring_req_header {
 };
 
 /**
- * sqe commands to the kernel
+ * sqe commands to the kernel on fuse dev
  */
 enum fuse_uring_cmd {
 	FUSE_IO_URING_CMD_INVALID = 0,
@@ -1267,17 +1299,58 @@ enum fuse_uring_cmd {
 };
 
 /**
+ * sqe commands to the kernel on fuse file
+ */
+enum fuse_uring_fcmd {
+	FUSE_IO_URING_FCMD_INVALID = 0,
+
+	FUSE_IO_URING_FCMD_ZC_WRITE = 1,
+};
+
+/**
  * In the 80B command area of the SQE.
+ * 24 bytes
  */
 struct fuse_uring_cmd_req {
+	/* 8 bytes */
 	uint64_t flags;
 
 	/* entry identifier for commits */
+	/* 8 bytes */
 	uint64_t commit_id;
 
 	/* queue the command is for (queue index) */
+	/* 2 bytes */
 	uint16_t qid;
+	/* 6 bytes */
 	uint8_t padding[6];
+};
+
+/**
+ * In the 80B command area of the SQE.
+ */
+struct fuse_uring_cl_zc_write {
+};
+
+struct fuse_uring_fcmd_req {
+	union {
+		struct fuse_uring_cl_zc_write zc_write;
+	};
+};
+
+/**
+ * In the 32B PDU area of io_uring_cmd.
+ */
+struct fuse_uring_rw {
+	/* 8 bytes */
+	uint64_t off;
+	/* 8 bytes */
+	uint64_t len;
+	/* 4 bytes */
+	uint32_t flags;
+
+	/* 4 bytes */
+	int32_t res;
 };
 
 #endif /* _LINUX_FUSE_H */

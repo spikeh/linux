@@ -7,6 +7,7 @@
 */
 
 #include "fuse_i.h"
+#include "dev_uring_i.h"
 
 #include <linux/pagemap.h>
 #include <linux/slab.h>
@@ -21,6 +22,7 @@
 #include <linux/filelock.h>
 #include <linux/splice.h>
 #include <linux/task_io_accounting_ops.h>
+#include <linux/io_uring/cmd.h>
 
 static int fuse_send_open(struct fuse_mount *fm, u64 nodeid,
 			  unsigned int open_flags, int opcode,
@@ -799,8 +801,34 @@ static void fuse_aio_complete_req(struct fuse_mount *fm, struct fuse_args *args,
 	fuse_io_free(ia);
 }
 
+static void fuse_iou_complete_req(struct fuse_mount *fm, struct fuse_args *args,
+				  int err)
+{
+	struct fuse_io_args *ia = container_of(args, typeof(*ia), ap.args);
+	struct fuse_io_priv *io = ia->io;
+	ssize_t pos = -1;
+
+	if (err) {
+		/* Nothing */
+	} else if (io->write) {
+		struct fuse_zc_write_in *inarg = &ia->zc_write.in;
+		struct fuse_zc_write_out *outarg = &ia->zc_write.out;
+		if (outarg->size > inarg->size) {
+			err = -EIO;
+		} else if (inarg->size != outarg->size) {
+			pos = inarg->offset - io->offset + outarg->size;
+		}
+	} else {
+		// TODO: read
+	}
+
+	fuse_aio_complete(io, err, pos);
+	fuse_io_free(ia);
+}
+
 static ssize_t fuse_async_req_send(struct fuse_mount *fm,
-				   struct fuse_io_args *ia, size_t num_bytes)
+				   struct fuse_io_args *ia, size_t num_bytes,
+				   void (*end_cb)(struct fuse_mount *fm, struct fuse_args *args, int err))
 {
 	ssize_t err;
 	struct fuse_io_priv *io = ia->io;
@@ -811,7 +839,7 @@ static ssize_t fuse_async_req_send(struct fuse_mount *fm,
 	io->reqs++;
 	spin_unlock(&io->lock);
 
-	ia->ap.args.end = fuse_aio_complete_req;
+	ia->ap.args.end = end_cb;
 	ia->ap.args.may_block = io->should_dirty;
 	err = fuse_simple_background(fm, &ia->ap.args, GFP_KERNEL);
 	if (err)
@@ -834,7 +862,7 @@ static ssize_t fuse_send_read(struct fuse_io_args *ia, loff_t pos, size_t count,
 	}
 
 	if (ia->io->async)
-		return fuse_async_req_send(fm, ia, count);
+		return fuse_async_req_send(fm, ia, count, fuse_aio_complete_req);
 
 	return fuse_simple_request(fm, &ia->ap.args);
 }
@@ -1140,7 +1168,7 @@ static ssize_t fuse_send_write(struct fuse_io_args *ia, loff_t pos,
 	}
 
 	if (ia->io->async)
-		return fuse_async_req_send(fm, ia, count);
+		return fuse_async_req_send(fm, ia, count, fuse_aio_complete_req);
 
 	err = fuse_simple_request(fm, &ia->ap.args);
 	if (!err && ia->write.out.size > count)
@@ -1393,7 +1421,7 @@ static bool fuse_dio_wr_exclusive_lock(struct kiocb *iocb, struct iov_iter *from
 		return true;
 
 	/* Parallel dio beyond EOF is not supported, at least for now. */
-	if (fuse_io_past_eof(iocb, from))
+	if (from && fuse_io_past_eof(iocb, from))
 		return true;
 
 	return false;
@@ -2557,6 +2585,103 @@ unlock:
 	return copied;
 }
 
+static void fuse_zc_write_args_fill(struct fuse_io_args *ia, struct fuse_file *ff,
+				    unsigned int shmfd, loff_t pos, size_t count)
+{
+	struct fuse_args *args = &ia->ap.args;
+	struct fuse_zc_write_in *inarg = &ia->zc_write.in;
+	struct fuse_zc_write_out *outarg = &ia->zc_write.out;
+
+	inarg->fh = ff->fh;
+	inarg->shmfd = shmfd;
+	inarg->offset = pos;
+	inarg->size = count;
+	inarg->flags = 0;
+
+	args->opcode = FUSE_ZC_WRITE;
+	args->nodeid = ff->nodeid;
+	args->in_numargs = 1;
+	args->in_args[0].size = sizeof(ia->zc_write.in);
+	args->in_args[0].value = inarg;
+	args->out_numargs = 1;
+	args->out_args[0].size = sizeof(ia->zc_write.out);
+	args->out_args[0].value = outarg;
+}
+
+static ssize_t fuse_send_zc_write(struct fuse_io_args *ia)
+{
+	struct kiocb *iocb = ia->io->iocb;
+	struct file *file = iocb->ki_filp;
+	struct fuse_file *ff = file->private_data;
+	struct fuse_mount *fm = ff->fm;
+	struct io_uring_cmd *cmd = iocb->private;
+	size_t count = cmd->sqe->len;
+
+	fuse_zc_write_args_fill(ia, ff, cmd->sqe->optlen,
+				iocb->ki_pos, count);
+
+	return fuse_async_req_send(fm, ia, count,
+				   fuse_iou_complete_req);
+}
+
+static ssize_t fuse_do_zc_write(struct fuse_io_priv *io)
+{
+	struct fuse_io_args *ia;
+
+	ia = kzalloc(sizeof(*ia), GFP_KERNEL);
+	if (!ia)
+		return -ENOMEM;
+	ia->io = io;
+	io->should_dirty = 0;
+
+	return fuse_send_zc_write(ia);
+}
+
+static ssize_t fuse_do_async_zc_write(struct kiocb *iocb)
+{
+	ssize_t ret = 0;
+	struct file *file = iocb->ki_filp;
+	struct fuse_file *ff = file->private_data;
+	loff_t offset = iocb->ki_pos;
+	struct fuse_io_priv *io;
+
+	io = kmalloc(sizeof(struct fuse_io_priv), GFP_KERNEL);
+	if (!io)
+		return -ENOMEM;
+	spin_lock_init(&io->lock);
+	kref_init(&io->refcnt);
+	io->reqs = 1;
+	io->bytes = -1;
+	io->size = 0;
+	io->offset = offset;
+	io->write = 1;
+	io->err = 0;
+	/*
+	 * By default, we want to optimize all I/Os with async request
+	 * submission to the client filesystem if supported.
+	 */
+	io->async = ff->fm->fc->async_dio;
+	io->iocb = iocb;
+	io->blocking = false;
+
+	ret = fuse_do_zc_write(io);
+	fuse_aio_complete(io, ret < 0 ? ret : 0, -1);
+
+	return -EIOCBQUEUED;
+}
+
+static ssize_t fuse_zc_write(struct kiocb *iocb)
+{
+	ssize_t res;
+	bool exclusive;
+
+	fuse_dio_lock(iocb, NULL, &exclusive);
+	res = fuse_do_async_zc_write(iocb);
+	fuse_dio_unlock(iocb, exclusive);
+
+	return res;
+}
+
 static int fuse_launder_folio(struct folio *folio)
 {
 	int err = 0;
@@ -3392,6 +3517,119 @@ static ssize_t fuse_copy_file_range(struct file *src_file, loff_t src_off,
 	return ret;
 }
 
+static void cmd_complete(struct io_uring_cmd *cmd, unsigned int issue_flags)
+{
+	struct fuse_uring_rw *rw = io_uring_cmd_to_pdu(cmd, struct fuse_uring_rw);
+
+	io_uring_cmd_done(cmd, rw->res, 0, issue_flags);
+}
+
+static void fuse_complete_zc_rw(struct kiocb *kiocb, long res)
+{
+	struct io_uring_cmd *cmd = kiocb->private;
+	struct io_kiocb *req = cmd_to_io_kiocb(cmd);
+	struct fuse_uring_rw *rw = io_uring_cmd_to_pdu(cmd, struct fuse_uring_rw);
+
+	rw->res = res;
+
+	io_uring_cmd_do_in_task_lazy(cmd, cmd_complete);
+}
+
+static int fuse_file_uring_zc_write(struct io_uring_cmd *cmd)
+{
+	struct io_kiocb *req = cmd_to_io_kiocb(cmd);
+	struct io_uring_cmd_data *cache = req->async_data;
+	const struct io_uring_sqe *sqe = cmd->sqe;
+	struct fuse_uring_rw *rw = (struct fuse_uring_rw *)&cmd->pdu;
+	struct file *file;
+
+	struct fuse_file *ff;
+	struct fuse_mount *fm;
+	struct fuse_conn *fc;
+	struct kiocb *kiocb;
+	int ret = 0;
+
+	// NOTE: io_uring_cmd_prep only uses:
+	// * uring_cmd_flags | stored in cmd->flags
+	// * buf_index | if IORING_URING_CMD_FIXED
+	// * cmd_op | stored in cmd->cmd_op
+
+	file = cmd->file;
+	ff = file->private_data;
+	fm = ff->fm;
+	fc = fm->fc;
+
+	kiocb = kzalloc(sizeof(struct kiocb), GFP_KERNEL);
+	if (!kiocb)
+		return -ENOMEM;
+	kiocb->private = cmd;
+	kiocb->ki_pos = sqe->addr;
+	kiocb->ki_ioprio = get_current_ioprio();
+	kiocb->dio_complete = NULL;
+	kiocb->ki_flags = 0;
+
+	cache->op_data = kiocb;
+
+	if (unlikely(!(file->f_mode & FMODE_WRITE)))
+		return -EBADF;
+
+	if (S_ISREG(file_inode(file)->i_mode))
+		req->flags |= REQ_F_ISREG;
+
+	kiocb->ki_flags = file->f_iocb_flags;
+	// FIXME: what is the cache?
+	kiocb->ki_flags |= (IOCB_ALLOC_CACHE | IOCB_WRITE);
+	kiocb->ki_complete = fuse_complete_zc_rw;
+	kiocb->ki_filp = file;
+	req->cqe.res = 0;
+
+	ret = fuse_zc_write(kiocb);
+	if (ret)
+		return ret;
+
+	return -EIOCBQUEUED;
+}
+
+static int fuse_file_uring_cmd(struct io_uring_cmd *cmd, unsigned int issue_flags)
+{
+	struct file *file;
+	struct fuse_file *ff;
+	struct fuse_mount *fm;
+	struct fuse_conn *fc;
+	u32 cmd_op = cmd->cmd_op;
+	int err;
+
+	file = cmd->file;
+	ff = READ_ONCE(file->private_data);
+	fm = ff->fm;
+	fc = fm->fc;
+
+	/* Once a connection has io-uring enabled on it, it can't be disabled */
+	if (!fuse_uring_enabled() && !fc->io_uring) {
+		pr_info_ratelimited("fuse-io-uring is disabled\n");
+		return -EOPNOTSUPP;
+	}
+
+	if (fc->aborted)
+		return -ECONNABORTED;
+	if (!fc->connected)
+		return -ENOTCONN;
+	if (!fc->initialized)
+		return -EAGAIN;
+
+	switch(cmd_op) {
+	case FUSE_IO_URING_FCMD_ZC_WRITE:
+		err = fuse_file_uring_zc_write(cmd);
+		break;
+	default:
+		err = -EINVAL;
+		goto out;
+	}
+
+out:
+	return err;
+}
+
 static const struct file_operations fuse_file_operations = {
 	.llseek		= fuse_file_llseek,
 	.read_iter	= fuse_file_read_iter,
@@ -3411,6 +3649,9 @@ static const struct file_operations fuse_file_operations = {
 	.poll		= fuse_file_poll,
 	.fallocate	= fuse_file_fallocate,
 	.copy_file_range = fuse_copy_file_range,
+#ifdef CONFIG_FUSE_IO_URING
+	.uring_cmd	= fuse_file_uring_cmd,
+#endif
 };
 
 static const struct address_space_operations fuse_file_aops  = {
