@@ -135,6 +135,8 @@ def test_zcrx_rss(cfg) -> None:
 def main() -> None:
     with NetDrvEpEnv(__file__) as cfg:
         cfg.bin_local = path.abspath(path.dirname(__file__) + "/../../../drivers/net/hw/iou-zcrx")
+        cmd("cp {} {}".format(cfg.bin_local, path.abspath(path.dirname(__file__) + "/../../../drivers/net/hw/iperf3")))
+        cfg.bin_local = path.abspath(path.dirname(__file__) + "/../../../drivers/net/hw/iperf3")
         cfg.bin_remote = cfg.remote.deploy(cfg.bin_local)
 
         ksft_run(globs=globals(), case_pfx={"test_"}, args=(cfg, ))

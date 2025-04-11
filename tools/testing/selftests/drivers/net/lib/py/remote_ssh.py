@@ -30,7 +30,7 @@ class Remote:
         if not self._tmpdir:
             self._tmpdir = "/tmp/" + self._mktmp()
             cmd("mkdir " + self._tmpdir, host=self)
-        file_name = self._tmpdir + "/" + self._mktmp() + os.path.basename(what)
+        file_name = self._tmpdir + "/" + os.path.basename(what)
 
         if not os.path.isabs(what):
             what = os.path.abspath(self.dir_path + "/" + what)
