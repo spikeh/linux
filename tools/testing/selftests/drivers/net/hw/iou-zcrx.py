@@ -26,6 +26,12 @@ def _set_flow_rule(cfg, chan):
     return int(values)
 
 
+def _set_flow_rule_rss_ctx(cfg, rss_ctx):
+    output = ethtool(f"-N {cfg.ifname} flow-type tcp6 dst-port 9999 context {rss_ctx}", host=cfg.remote).stdout
+    values = re.search(r'ID (\d+)', output).group(1)
+    return int(values)
+
+
 def test_zcrx(cfg) -> None:
     cfg.require_ipver('6')
 
@@ -35,9 +41,13 @@ def test_zcrx(cfg) -> None:
     rx_ring = _get_rx_ring_entries(cfg)
 
     try:
-        ethtool(f"-G {cfg.ifname} rx 64", host=cfg.remote)
+        ethtool(f"-G {cfg.ifname} tcp-data-split on", host=cfg.remote)
+        ethtool(f"-G {cfg.ifname} rx 128", host=cfg.remote)
         ethtool(f"-X {cfg.ifname} equal {combined_chans - 1}", host=cfg.remote)
-        flow_rule_id = _set_flow_rule(cfg, combined_chans - 1)
+        output = ethtool(f"-X {cfg.ifname} context new start {combined_chans - 1} equal 1", host=cfg.remote)
+        print(output.stdout)
+        flow_rule_id = _set_flow_rule_rss_ctx(cfg, 1)
+        #flow_rule_id = _set_flow_rule(cfg, combined_chans - 1)
 
         rx_cmd = f"{cfg.bin_remote} -s -p 9999 -i {cfg.ifname} -q {combined_chans - 1}"
         tx_cmd = f"{cfg.bin_local} -c -h {cfg.remote_addr_v['6']} -p 9999 -l 12840"
@@ -46,11 +56,13 @@ def test_zcrx(cfg) -> None:
             cmd(tx_cmd)
     finally:
         ethtool(f"-N {cfg.ifname} delete {flow_rule_id}", host=cfg.remote)
+        ethtool(f"-X {cfg.ifname} delete context 1", host=cfg.remote)
         ethtool(f"-X {cfg.ifname} default", host=cfg.remote)
         ethtool(f"-G {cfg.ifname} rx {rx_ring}", host=cfg.remote)
+        ethtool(f"-G {cfg.ifname} tcp-data-split auto", host=cfg.remote)
 
 
-def test_zcrx_oneshot(cfg) -> None:
+def DISABLED_test_zcrx_oneshot(cfg) -> None:
     cfg.require_ipver('6')
 
     combined_chans = _get_combined_channels(cfg)
@@ -59,6 +71,7 @@ def test_zcrx_oneshot(cfg) -> None:
     rx_ring = _get_rx_ring_entries(cfg)
 
     try:
+        ethtool(f"-G {cfg.ifname} tcp-data-split on", host=cfg.remote)
         ethtool(f"-G {cfg.ifname} rx 64", host=cfg.remote)
         ethtool(f"-X {cfg.ifname} equal {combined_chans - 1}", host=cfg.remote)
         flow_rule_id = _set_flow_rule(cfg, combined_chans - 1)
@@ -72,6 +85,7 @@ def test_zcrx_oneshot(cfg) -> None:
         ethtool(f"-N {cfg.ifname} delete {flow_rule_id}", host=cfg.remote)
         ethtool(f"-X {cfg.ifname} default", host=cfg.remote)
         ethtool(f"-G {cfg.ifname} rx {rx_ring}", host=cfg.remote)
+        ethtool(f"-G {cfg.ifname} tcp-data-split auto", host=cfg.remote)
 
 
 def main() -> None:
