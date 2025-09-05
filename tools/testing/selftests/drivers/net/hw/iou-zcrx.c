@@ -38,7 +38,7 @@
 #include <liburing.h>
 
 static long page_size;
-#define AREA_SIZE (8192 * page_size)
+#define AREA_SIZE (32768 * page_size)
 #define SEND_SIZE (512 * 4096)
 #define min(a, b) \
 	({ \
@@ -218,6 +218,10 @@ static void process_accept(struct io_uring *ring, struct io_uring_cqe *cqe)
 		error(1, 0, "Unexpected second connection");
 
 	connfd = cqe->res;
+	int id = -1;
+	socklen_t len = sizeof(id);
+	int ret = getsockopt(connfd, SOL_SOCKET, SO_INCOMING_NAPI_ID, &id, &len);
+	printf("----- process_accept: getsockopt res=%d id=%d\n", ret, id);
 	if (cfg_oneshot)
 		add_recvzc_oneshot(ring, connfd, page_size);
 	else
@@ -234,6 +238,8 @@ static void process_recvzc(struct io_uring *ring, struct io_uring_cqe *cqe)
 	char *data;
 	ssize_t n;
 	int i;
+
+	printf("----- process_recvzc: res=%d flags=0x%x\n", cqe->res, cqe->flags);
 
 	if (cqe->res == 0 && cqe->flags == 0 && cfg_oneshot_recvs == 0) {
 		stop = true;
