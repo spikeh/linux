@@ -1149,6 +1149,9 @@ err_genlmsg_free:
 	return err;
 }
 
+#define dw_debug(fmt, ...) \
+	printk(KERN_INFO "%s | %s:%d: " fmt "\n", current->comm, __func__, __LINE__, ##__VA_ARGS__)
+
 int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 {
 	u32 src_ifidx, src_qid, dst_ifidx, dst_qid, q_type;
@@ -1178,6 +1181,8 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 			       "Destination driver cannot be same as source driver");
 		return -EOPNOTSUPP;
 	}
+
+	dw_debug("src ifidx=%u qid=%u | dst ifidx=%u", src_ifidx, src_qid, dst_ifidx);
 
 	rsp = genlmsg_new(GENLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!rsp)
@@ -1276,7 +1281,8 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 
 	netdev_rx_queue_peer(src_dev, src_rxq, dst_rxq);
 
-	nla_put_u32(rsp, NETDEV_A_QUEUE_PAIR_DST_QUEUE_ID, dst_qid);
+	err = nla_put_u32(rsp, NETDEV_A_QUEUE_PAIR_DST_QUEUE_ID, dst_qid);
+	dw_debug("dst qid=%u rxq=%px put u32 err=%d", dst_qid, dst_rxq, err);
 	genlmsg_end(rsp, hdr);
 
 	netdev_unlock(src_dev);
