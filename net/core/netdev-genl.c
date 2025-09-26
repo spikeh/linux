@@ -1146,7 +1146,6 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 	u32 src_ifidx, src_qid, dst_ifidx, dst_qid;
 	struct netdev_rx_queue *src_rxq, *dst_rxq;
 	struct net_device *src_dev, *dst_dev;
-	struct netdev_nl_sock *priv;
 	struct sk_buff *rsp;
 	int err = 0;
 	void *hdr;
@@ -1165,10 +1164,6 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		return -EOPNOTSUPP;
 	}
 
-	priv = genl_sk_priv_get(&netdev_nl_family, NETLINK_CB(skb).sk);
-	if (IS_ERR(priv))
-		return PTR_ERR(priv);
-
 	rsp = genlmsg_new(GENLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!rsp)
 		return -ENOMEM;
@@ -1179,12 +1174,10 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_genlmsg_free;
 	}
 
-	mutex_lock(&priv->lock);
-
 	src_dev = netdev_get_by_index_lock(genl_info_net(info), src_ifidx);
 	if (!src_dev) {
 		err = -ENODEV;
-		goto err_unlock_sock;
+		goto err_genlmsg_free;
 	}
 	if (!netif_device_present(src_dev)) {
 		err = -ENODEV;
@@ -1247,7 +1240,6 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 
 	netdev_unlock(dst_dev);
 	netdev_unlock(src_dev);
-	mutex_unlock(&priv->lock);
 
 	return genlmsg_reply(rsp, info);
 
@@ -1255,8 +1247,6 @@ err_unlock_dst_dev:
 	netdev_unlock(dst_dev);
 err_unlock_src_dev:
 	netdev_unlock(src_dev);
-err_unlock_sock:
-	mutex_unlock(&priv->lock);
 err_genlmsg_free:
 	nlmsg_free(rsp);
 	return err;
