@@ -2769,6 +2769,11 @@ static inline void *netdev_priv(const struct net_device *dev)
  */
 #define SET_NETDEV_DEVTYPE(net, devtype)	((net)->dev.type = (devtype))
 
+static inline bool netdev_is_virtual(struct net_device *dev)
+{
+	return dev->dev.parent == NULL;
+}
+
 void netif_queue_set_napi(struct net_device *dev, unsigned int queue_index,
 			  enum netdev_queue_type type,
 			  struct napi_struct *napi);

@@ -1174,32 +1174,48 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_genlmsg_free;
 	}
 
+	/* ensure dst is virtual and src is non-virtual, then always lock dst
+	 * first followed by src */
 	src_dev = netdev_get_by_index_lock(genl_info_net(info), src_ifidx);
-	if (!src_dev) {
-		err = -ENODEV;
-		goto err_genlmsg_free;
-	}
-	if (!netif_device_present(src_dev)) {
-		err = -ENODEV;
-		goto err_unlock_src_dev;
-	}
-	if (!src_dev->dev.parent) {
+	if (netdev_is_virtual(src_dev)) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver is a virtual device");
-		goto err_unlock_src_dev;
+		netdev_unlock(src_dev);
+		nlmsg_free(rsp);
+		return err;
+	}
+	netdev_unlock(src_dev);
+
+	dst_dev = netdev_get_by_index_lock(genl_info_net(info), dst_ifidx);
+	if (!netdev_is_virtual(dst_dev)) {
+		err = -EOPNOTSUPP;
+		NL_SET_ERR_MSG(info->extack,
+			       "Destination driver is not a virtual device");
+		netdev_unlock(dst_dev);
+		nlmsg_free(rsp);
+		return err;
+	}
+	netdev_unlock(dst_dev);
+
+	netdev_lock(dst_dev);
+	netdev_lock(src_dev);
+
+	if (!netif_device_present(src_dev)) {
+		err = -ENODEV;
+		goto err_unlock_netdev;
 	}
 	if (!src_dev->queue_mgmt_ops) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver does not support queue management operations");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 	if (src_qid >= src_dev->num_rx_queues) {
 		err = -ERANGE;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver queue out of range");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 
 	src_rxq = __netif_get_rx_queue(src_dev, src_qid);
@@ -1207,27 +1223,26 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		err = -EBUSY;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver queue already bound");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 
-	dst_dev = netdev_get_by_index_lock(genl_info_net(info), dst_ifidx);
-	if (!dst_dev) {
+	if (!netif_device_present(dst_dev)) {
 		err = -ENODEV;
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 	if (!dst_dev->queue_mgmt_ops ||
 	    !dst_dev->queue_mgmt_ops->ndo_queue_create) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Destination driver does not support queue management operations");
-		goto err_unlock_dst_dev;
+		goto err_unlock_netdev;
 	}
 
 	err = dst_dev->queue_mgmt_ops->ndo_queue_create(dst_dev);
 	if (err <= 0) {
 		NL_SET_ERR_MSG(info->extack,
 			       "Destination driver unable to create a new queue");
-		goto err_unlock_dst_dev;
+		goto err_unlock_netdev;
 	}
 
 	dst_qid = err - 1;
@@ -1238,15 +1253,14 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 	nla_put_u32(rsp, NETDEV_A_QUEUE_PAIR_DST_QUEUE_ID, dst_qid);
 	genlmsg_end(rsp, hdr);
 
-	netdev_unlock(dst_dev);
 	netdev_unlock(src_dev);
+	netdev_unlock(dst_dev);
 
 	return genlmsg_reply(rsp, info);
 
-err_unlock_dst_dev:
-	netdev_unlock(dst_dev);
-err_unlock_src_dev:
+err_unlock_netdev:
 	netdev_unlock(src_dev);
+	netdev_unlock(dst_dev);
 err_genlmsg_free:
 	nlmsg_free(rsp);
 	return err;
