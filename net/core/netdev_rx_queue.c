@@ -111,15 +111,7 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 	}
 
 	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
-	rxq = __netif_get_rx_queue_peer(&dev, &rxq_idx);
 
-	/* Check again since dev might have changed */
-	if (!netdev_need_ops_lock(dev))
-		return -EOPNOTSUPP;
-	if (!dev->dev.parent) {
-		NL_SET_ERR_MSG(extack, "rx queue is mapped to a virtual netdev");
-		return -EBUSY;
-	}
 	if (dev->cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
 		NL_SET_ERR_MSG(extack, "tcp-data-split is disabled");
 		return -EINVAL;
@@ -132,6 +124,8 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		NL_SET_ERR_MSG(extack, "unable to custom memory provider to device with XDP program attached");
 		return -EEXIST;
 	}
+
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
 	if (rxq->mp_params.mp_ops) {
 		NL_SET_ERR_MSG(extack, "designated queue already memory provider bound");
 		return -EEXIST;
@@ -154,10 +148,37 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		    struct pp_memory_provider_params *p)
 {
+	struct netdev_rx_queue *rxq;
 	int ret;
 
 	netdev_lock(dev);
-	ret = __net_mp_open_rxq(dev, rxq_idx, p, NULL);
+	if (rxq_idx >= dev->real_num_rx_queues) {
+		ret = -ERANGE;
+		goto unlock_dev;
+	}
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
+
+	if (!netdev_is_virtual(dev)) {
+		if (rxq->peer) {
+			ret = -EBUSY;
+			goto unlock_dev;
+		}
+
+		ret = __net_mp_open_rxq(dev, rxq_idx, p, NULL);
+		goto unlock_dev;
+	}
+
+	if (!rxq->peer) {
+		ret = -EOPNOTSUPP;
+		goto unlock_dev;
+	}
+
+	netdev_lock(rxq->peer->dev);
+	rxq_idx = get_netdev_rx_queue_index(rxq->peer);
+	ret = __net_mp_open_rxq(rxq->peer->dev, rxq_idx, p, NULL);
+	netdev_unlock(rxq->peer->dev);
+unlock_dev:
 	netdev_unlock(dev);
 	return ret;
 }
