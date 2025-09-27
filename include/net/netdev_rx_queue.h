@@ -70,7 +70,7 @@ static inline void netdev_rx_queue_peer(struct net_device *src_dev,
 					struct netdev_rx_queue *src_rxq,
 					struct netdev_rx_queue *dst_rxq)
 {
-	dev_hold(src_dev);
+	netdev_hold(src_dev, &src_rxq->dev_tracker, GFP_KERNEL);
 	__netdev_rx_queue_peer(src_rxq, dst_rxq);
 	if (dst_rxq->dev->netdev_ops->ndo_peer_queues)
 		dst_rxq->dev->netdev_ops->ndo_peer_queues(dst_rxq->dev, dst_rxq);
@@ -90,7 +90,7 @@ static inline void netdev_rx_queue_unpeer(struct net_device *src_dev,
 	if (dst_rxq->dev->netdev_ops->ndo_unpeer_queues)
 		dst_rxq->dev->netdev_ops->ndo_unpeer_queues(dst_rxq->dev, dst_rxq);
 	__netdev_rx_queue_unpeer(src_rxq, dst_rxq);
-	dev_put(src_dev);
+	netdev_put(src_dev, &src_rxq->dev_tracker);
 }
 
 static inline bool netdev_rx_queue_peered(struct net_device *dev,
