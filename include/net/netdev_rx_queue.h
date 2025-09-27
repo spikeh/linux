@@ -59,7 +59,7 @@ get_netdev_rx_queue_index(struct netdev_rx_queue *queue)
 
 int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq);
 
-static inline void __netdev_rx_queue_peer(struct netdev_rx_queue *src_rxq,
+static void __netdev_rx_queue_peer(struct netdev_rx_queue *src_rxq,
 					  struct netdev_rx_queue *dst_rxq)
 {
 	src_rxq->peer = dst_rxq;
@@ -76,7 +76,7 @@ static inline void netdev_rx_queue_peer(struct net_device *src_dev,
 		dst_rxq->dev->netdev_ops->ndo_peer_queues(dst_rxq->dev, dst_rxq);
 }
 
-static inline void __netdev_rx_queue_unpeer(struct netdev_rx_queue *src_rxq,
+static void __netdev_rx_queue_unpeer(struct netdev_rx_queue *src_rxq,
 					    struct netdev_rx_queue *dst_rxq)
 {
 	src_rxq->peer = NULL;
