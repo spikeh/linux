@@ -183,16 +183,16 @@ unlock_dev:
 	return ret;
 }
 
-void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
+void __net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
 			const struct pp_memory_provider_params *old_p)
 {
 	struct netdev_rx_queue *rxq;
 	int err;
 
-	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
+	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
 		return;
 
-	rxq = __netif_get_rx_queue_peer(&dev, &ifq_idx);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
 
 	/* Callers holding a netdev ref may get here after we already
 	 * went thru shutdown via dev_memory_provider_uninstall().
@@ -207,14 +207,35 @@ void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 
 	rxq->mp_params.mp_ops = NULL;
 	rxq->mp_params.mp_priv = NULL;
-	err = netdev_rx_queue_restart(dev, ifq_idx);
+	err = netdev_rx_queue_restart(dev, rxq_idx);
 	WARN_ON(err && err != -ENETDOWN);
 }
 
-void net_mp_close_rxq(struct net_device *dev, unsigned ifq_idx,
+void net_mp_close_rxq(struct net_device *dev, unsigned rxq_idx,
 		      struct pp_memory_provider_params *old_p)
 {
+	struct netdev_rx_queue *rxq;
+
 	netdev_lock(dev);
-	__net_mp_close_rxq(dev, ifq_idx, old_p);
+	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
+		goto unlock_dev;
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
+
+	if (!netdev_is_virtual(dev)) {
+		if (WARN_ON_ONCE(rxq->peer))
+			return;
+
+		__net_mp_close_rxq(dev, rxq_idx, old_p);
+	}
+
+	if (WARN_ON_ONCE(!rxq->peer))
+		return;
+
+	netdev_lock(rxq->peer->dev);
+	rxq_idx = get_netdev_rx_queue_index(rxq->peer);
+	__net_mp_close_rxq(rxq->peer->dev, rxq_idx, old_p);
+	netdev_unlock(rxq->peer->dev);
+unlock_dev:
 	netdev_unlock(dev);
 }
