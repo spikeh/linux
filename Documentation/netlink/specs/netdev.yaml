@@ -89,6 +89,10 @@ definitions:
     name: napi-threaded
     type: enum
     entries: [disabled, enabled]
+  -
+    name: peer-queue-type
+    type: enum
+    entries: [proxy, source]
 
 attribute-sets:
   -
@@ -301,13 +305,29 @@ attribute-sets:
     name: peer-info
     attributes:
       -
+        name: netns-fd
+        type: u32
+      -
+        name: netns-pid
+        type: u32
+      -
+        name: netns-id
+        type: u32
+      -
         name: id
-        doc: Queue index of the netdevice to which the peer queue belongs.
+        doc: Queue index of the netdevice to which the peer queue belongs in
+             the netns.
         type: u32
       -
         name: ifindex
-        doc: ifindex of the netdevice to which the peer queue belongs.
+        doc: ifindex of the netdevice to which the peer queue belongs in the
+             netns.
         type: u32
+      -
+        name: type
+        doc: Peer queue type as proxy or source.
+        type: u32
+        enum: peer-queue-type
   -
     name: queue
     attributes:
@@ -351,7 +371,7 @@ attribute-sets:
         nested-attributes: xsk-info
       -
         name: peer
-        doc: Whether this queue was bound to another peer queue.
+        doc: Information of the peer queue, if any.
         type: nest
         nested-attributes: peer-info
   -
@@ -813,8 +833,10 @@ operations:
             - id
 
     -
-      name: bind-queue
-      doc: Bind a physical netdev queue to a virtual one
+      name: proxy-rx-queue
+      doc: Create a proxy RX queue in a netdev and bind it to a source RX
+           queue. Some queue operations e.g. open a memory provider on a proxy
+           queue are transparently redirected to its peered source queue.
       attribute-set: queue-pair
       do:
         request:
