@@ -150,11 +150,7 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 	}
 
 	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
-	rxq = __netif_get_rx_queue_peer(&dev, &rxq_idx);
 
-	/* Check again since dev might have changed */
-	if (!netdev_need_ops_lock(dev))
-		return -EOPNOTSUPP;
 	if (!dev->dev.parent) {
 		NL_SET_ERR_MSG(extack, "rx queue is mapped to a virtual netdev");
 		return -EBUSY;
@@ -171,6 +167,8 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		NL_SET_ERR_MSG(extack, "unable to custom memory provider to device with XDP program attached");
 		return -EEXIST;
 	}
+
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
 	if (rxq->mp_params.mp_ops) {
 		NL_SET_ERR_MSG(extack, "designated queue already memory provider bound");
 		return -EEXIST;
@@ -193,24 +191,51 @@ int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		    struct pp_memory_provider_params *p)
 {
+	struct netdev_rx_queue *rxq;
 	int ret;
 
 	netdev_lock(dev);
-	ret = __net_mp_open_rxq(dev, rxq_idx, p, NULL);
+	if (rxq_idx >= dev->real_num_rx_queues) {
+		ret = -ERANGE;
+		goto unlock_dev;
+	}
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
+
+	if (dev->dev.parent) {
+		if (rxq->peer) {
+			ret = -EBUSY;
+			goto unlock_dev;
+		}
+
+		ret = __net_mp_open_rxq(dev, rxq_idx, p, NULL);
+		goto unlock_dev;
+	}
+
+	if (!rxq->peer) {
+		ret = -EOPNOTSUPP;
+		goto unlock_dev;
+	}
+
+	netdev_lock(rxq->peer->dev);
+	rxq_idx = get_netdev_rx_queue_index(rxq->peer);
+	ret = __net_mp_open_rxq(rxq->peer->dev, rxq_idx, p, NULL);
+	netdev_unlock(rxq->peer->dev);
+unlock_dev:
 	netdev_unlock(dev);
 	return ret;
 }
 
-void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
+void __net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
 			const struct pp_memory_provider_params *old_p)
 {
 	struct netdev_rx_queue *rxq;
 	int err;
 
-	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
+	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
 		return;
 
-	rxq = __netif_get_rx_queue_peer(&dev, &ifq_idx);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
 
 	/* Callers holding a netdev ref may get here after we already
 	 * went thru shutdown via dev_memory_provider_uninstall().
@@ -225,14 +250,35 @@ void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 
 	rxq->mp_params.mp_ops = NULL;
 	rxq->mp_params.mp_priv = NULL;
-	err = netdev_rx_queue_restart(dev, ifq_idx);
+	err = netdev_rx_queue_restart(dev, rxq_idx);
 	WARN_ON(err && err != -ENETDOWN);
 }
 
-void net_mp_close_rxq(struct net_device *dev, unsigned ifq_idx,
+void net_mp_close_rxq(struct net_device *dev, unsigned rxq_idx,
 		      struct pp_memory_provider_params *old_p)
 {
+	struct netdev_rx_queue *rxq;
+
 	netdev_lock(dev);
-	__net_mp_close_rxq(dev, ifq_idx, old_p);
+	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
+		goto unlock_dev;
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
+
+	if (dev->dev.parent) {
+		if (WARN_ON_ONCE(rxq->peer))
+			goto unlock_dev;
+
+		__net_mp_close_rxq(dev, rxq_idx, old_p);
+	}
+
+	if (WARN_ON_ONCE(!rxq->peer))
+		goto unlock_dev;
+
+	netdev_lock(rxq->peer->dev);
+	rxq_idx = get_netdev_rx_queue_index(rxq->peer);
+	__net_mp_close_rxq(rxq->peer->dev, rxq_idx, old_p);
+	netdev_unlock(rxq->peer->dev);
+unlock_dev:
 	netdev_unlock(dev);
 }

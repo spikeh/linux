@@ -1151,11 +1151,34 @@ err_genlmsg_free:
 	return err;
 }
 
+static void netdev_lock_pair(struct net_device *one, struct net_device *two)
+{
+	if (one < two) {
+		netdev_lock(one);
+		netdev_lock(two);
+	} else {
+		netdev_lock(two);
+		netdev_lock(one);
+	}
+}
+
+static void netdev_unlock_pair(struct net_device *one, struct net_device *two)
+{
+	if (one < two) {
+		netdev_unlock(one);
+		netdev_unlock(two);
+	} else {
+		netdev_unlock(two);
+		netdev_unlock(one);
+	}
+}
+
 int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 {
 	u32 src_ifidx, src_qid, dst_ifidx, dst_qid, q_type;
 	struct netdev_rx_queue *src_rxq, *dst_rxq, *tmp_rxq;
 	struct net_device *src_dev, *dst_dev;
+	netdevice_tracker dev_tracker;
 	struct sk_buff *rsp;
 	int err = 0;
 	void *hdr;
@@ -1191,32 +1214,44 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_genlmsg_free;
 	}
 
-	src_dev = netdev_get_by_index_lock(genl_info_net(info), src_ifidx);
+	src_dev = netdev_get_by_index(genl_info_net(info),
+			       src_ifidx, &dev_tracker,
+			       GFP_KERNEL);
 	if (!src_dev) {
 		err = -ENODEV;
 		goto err_genlmsg_free;
 	}
+
+	dst_dev = netdev_get_by_index(genl_info_net(info),
+			       dst_ifidx, &dev_tracker,
+			       GFP_KERNEL);
+	if (!dst_dev) {
+		err = -ENODEV;
+		goto err_genlmsg_free;
+	}
+
+	netdev_lock_pair(src_dev, dst_dev);
 	if (!netif_device_present(src_dev)) {
 		err = -ENODEV;
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 	if (!src_dev->dev.parent) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver is a virtual device");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 	if (!src_dev->queue_mgmt_ops) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver does not support queue management operations");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 	if (src_qid >= src_dev->num_rx_queues) {
 		err = -ERANGE;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver queue out of range");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 
 	src_rxq = __netif_get_rx_queue(src_dev, src_qid);
@@ -1224,26 +1259,21 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		err = -EBUSY;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver queue already bound");
-		goto err_unlock_src_dev;
+		goto err_unlock_netdev;
 	}
 
-	dst_dev = netdev_get_by_index_lock(genl_info_net(info), dst_ifidx);
-	if (!dst_dev) {
-		err = -ENODEV;
-		goto err_unlock_src_dev;
-	}
 	if (!dst_dev->queue_mgmt_ops ||
 	    !dst_dev->queue_mgmt_ops->ndo_queue_create) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Destination driver does not support queue management operations");
-		goto err_unlock_dst_dev;
+		goto err_unlock_netdev;
 	}
 	if (dst_dev->real_num_rx_queues < 1) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Destination device must have at least one real RX queue");
-		goto err_unlock_dst_dev;
+		goto err_unlock_netdev;
 	}
 
 	tmp_rxq = __netif_get_rx_queue(dst_dev, dst_dev->real_num_rx_queues - 1);
@@ -1251,14 +1281,14 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Binding multiple queues from difference source devices not supported");
-		goto err_unlock_dst_dev;
+		goto err_unlock_netdev;
 	}
 
 	err = dst_dev->queue_mgmt_ops->ndo_queue_create(dst_dev);
 	if (err <= 0) {
 		NL_SET_ERR_MSG(info->extack,
 			       "Destination driver unable to create a new queue");
-		goto err_unlock_dst_dev;
+		goto err_unlock_netdev;
 	}
 
 	dst_qid = err - 1;
@@ -1269,15 +1299,16 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 	nla_put_u32(rsp, NETDEV_A_QUEUE_PAIR_DST_QUEUE_ID, dst_qid);
 	genlmsg_end(rsp, hdr);
 
-	netdev_unlock(dst_dev);
-	netdev_unlock(src_dev);
+	netdev_unlock_pair(src_dev, dst_dev);
+	dev_put(src_dev);
+	dev_put(dst_dev);
 
 	return genlmsg_reply(rsp, info);
 
-err_unlock_dst_dev:
-	netdev_unlock(dst_dev);
-err_unlock_src_dev:
-	netdev_unlock(src_dev);
+err_unlock_netdev:
+	netdev_unlock_pair(src_dev, dst_dev);
+	dev_put(src_dev);
+	dev_put(dst_dev);
 err_genlmsg_free:
 	nlmsg_free(rsp);
 	return err;
