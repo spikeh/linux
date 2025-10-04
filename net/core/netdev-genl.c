@@ -413,6 +413,7 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 
 		if (netdev_rx_queue_peered(netdev, q_idx)) {
 			struct net_device *p_netdev = netdev;
+			struct net *net, *p_net;
 			u32 p_q_idx = q_idx;
 			s32 netns_id;
 
@@ -420,20 +421,87 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 			if (!nest)
 				goto nla_put_failure;
 
+			/*
+			 * There are two different situations, either netdev is
+			 * real or it is virtual.
+			 *
+			 * ==VIRTUAL==
+			 * If it is virtual, then the peer netdev is real.
+			 * The queue pair has a ref on the real netdev, so it
+			 * can't be freed.
+			 *
+			 * As discussed, the only way for the queues in the
+			 * pair to become unpeered is for the virtual netdev to
+			 * be destroyed. That can't happen while the virtual
+			 * netdev instance lock is held. Thus, rxq->peer->peer
+			 * == rxq is an invariant here.
+			 *
+			 * If the real netdev is being unregistered, the struct
+			 * net_device remains valid since we hold a ref to it.
+			 * The returned data may be inconsistent, but should be
+			 * okay.
+			 *
+			 * Therefore, both rxq->peer and rxq->peer->dev will
+			 * give us valid pointers for the duration of this
+			 * function.
+			 *
+			 * We COULD actually take the instance lock of the peer
+			 * netdev. This is the same ordering as bind_queue and
+			 * mp_open: virtual -> real. But we don't need to and
+			 * not doing it keeps it consistent with the other
+			 * case.
+			 *
+			 * dev->ifindex is modified in
+			 * __dev_change_net_namespace under rtnl lock only.
+			 * Going back to rtnl lock here is never going to fly.
+			 * It is sufficient to READ_ONCE, since it is atomic in
+			 * most archs, and I think it is okay to return a stale
+			 * value.
+			 *
+			 * For struct net, it is protected by RCU in
+			 * dev->nd_net. It should be safe to rcu_deref() via
+			 * dev_net_rcu(). This could give us a stale net, but
+			 * that should be okay.
+			 *
+			 * The only problem, I think, is that ifindex might be
+			 * old but net (+ netnsid) might be new. Do you think
+			 * this is tolerable?
+			 *
+			 * ==REAL==
+			 * If it is real, then the peer netdev is virtual.
+			 * Unlike the other way round, there is no ref on the
+			 * virtual peer netdev to stop it from being freed in
+			 * memory in theory.
+			 *
+			 * But, I believe the saving grace is in netkit_uninit.
+			 * During the unpeering process, it will try to take
+			 * the netdev lock on the source (therefore, THIS)
+			 * netdev before unsetting the rxq->peer pointers.
+			 *
+			 * Therefore, it is guaranteed that if we get to this
+			 * point, with netdev instance lock held, and peer
+			 * valid, then for the duration of the lock the virtual
+			 * peer netdev won't be unregistered.
+			 *
+			 * Accessing the peer netdev ifindex + struct net is
+			 * the same.
+			 */
 			netif_get_rx_queue_peer_any(&p_netdev, &p_q_idx);
 			if (nla_put_u32(rsp, NETDEV_A_PEER_INFO_ID, p_q_idx) ||
 			    nla_put_u32(rsp, NETDEV_A_PEER_INFO_IFINDEX,
-					p_netdev->ifindex))
+					READ_ONCE(p_netdev->ifindex)))
 				goto nla_put_failure;
 
-			if (!net_eq(dev_net(netdev), dev_net(p_netdev))) {
-				netns_id = peernet2id_alloc(dev_net(netdev),
-							    dev_net(p_netdev),
-							    GFP_KERNEL);
+			rcu_read_lock();
+			net = dev_net_rcu(netdev);
+			p_net = dev_net_rcu(p_netdev);
+			if (!net_eq(net, p_net)) {
+				netns_id = peernet2id_alloc(net, p_net, GFP_ATOMIC);
 				if (nla_put_s32(rsp, NETDEV_A_PEER_INFO_NETNS_ID,
 						netns_id))
-					goto nla_put_failure;
+					goto nla_put_failure_rcu;
 			}
+			rcu_read_unlock();
 
 			nla_nest_end(rsp, nest);
 		}
@@ -464,6 +532,8 @@ netdev_nl_queue_fill_one(struct sk_buff *rsp, struct net_device *netdev,
 
 	return 0;
 
+nla_put_failure_rcu:
+	rcu_read_unlock();
 nla_put_failure:
 	genlmsg_cancel(rsp, hdr);
 	return -EMSGSIZE;
