@@ -849,28 +849,28 @@ static int do_server(struct memory_buffer *mem)
 		return -1;
 	}
 
-	ring_config = get_ring_config();
-	if (!ring_config) {
-		pr_err("Failed to get current ring configuration");
-		return -1;
-	}
-
-	if (configure_headersplit(ring_config, 1)) {
-		pr_err("Failed to enable TCP header split");
-		goto err_free_ring_config;
-	}
-
-	/* Configure RSS to divert all traffic from our devmem queues */
-	if (configure_rss()) {
-		pr_err("Failed to configure rss");
-		goto err_reset_headersplit;
-	}
-
-	/* Flow steer our devmem flows to start_queue */
-	if (configure_flow_steering(&server_sin)) {
-		pr_err("Failed to configure flow steering");
-		goto err_reset_rss;
-	}
+//	ring_config = get_ring_config();
+//	if (!ring_config) {
+//		pr_err("Failed to get current ring configuration");
+//		return -1;
+//	}
+//
+//	if (configure_headersplit(ring_config, 1)) {
+//		pr_err("Failed to enable TCP header split");
+//		goto err_free_ring_config;
+//	}
+//
+//	/* Configure RSS to divert all traffic from our devmem queues */
+//	if (configure_rss()) {
+//		pr_err("Failed to configure rss");
+//		goto err_reset_headersplit;
+//	}
+//
+//	/* Flow steer our devmem flows to start_queue */
+//	if (configure_flow_steering(&server_sin)) {
+//		pr_err("Failed to configure flow steering");
+//		goto err_reset_rss;
+//	}
 
 	if (bind_rx_queue(ifindex, mem->fd, create_queues(), num_queues, &ys)) {
 		pr_err("Failed to bind");
