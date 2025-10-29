@@ -1155,6 +1155,7 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 	struct netdev_rx_queue *src_rxq, *dst_rxq, *tmp_rxq;
 	u32 src_ifidx, src_qid, dst_ifidx, dst_qid, q_type;
 	struct net_device *src_dev, *dst_dev;
+	netdevice_tracker tracker;
 	struct sk_buff *rsp;
 	int err = 0;
 	void *hdr;
@@ -1219,7 +1220,8 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_unlock_dst_dev;
 	}
 
-	src_dev = dev_get_by_index(genl_info_net(info), src_ifidx);
+	src_dev = netdev_get_by_index(genl_info_net(info), src_ifidx, &tracker,
+				      GFP_KERNEL);
 	if (!src_dev) {
 		err = -ENODEV;
 		goto err_unlock_dst_dev;
@@ -1244,7 +1246,7 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	src_dev = netdev_put_lock(src_dev);
-	if (src_dev) {
+	if (!src_dev) {
 		err = -ENODEV;
 		goto err_unlock_dst_dev;
 	}
