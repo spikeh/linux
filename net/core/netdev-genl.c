@@ -1219,7 +1219,7 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		goto err_unlock_dst_dev;
 	}
 
-	src_dev = netdev_get_by_index_lock(genl_info_net(info), src_ifidx);
+	src_dev = dev_get_by_index(genl_info_net(info), src_ifidx);
 	if (!src_dev) {
 		err = -ENODEV;
 		goto err_unlock_dst_dev;
@@ -1228,19 +1228,25 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source device is a virtual device");
-		goto err_unlock_src_dev;
+		goto err_unlock_dst_dev_src_dev_put;
 	}
 	if (!netif_device_present(src_dev)) {
 		err = -ENODEV;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source device has been removed from the system");
-		goto err_unlock_src_dev;
+		goto err_unlock_dst_dev_src_dev_put;
 	}
 	if (!src_dev->queue_mgmt_ops) {
 		err = -EOPNOTSUPP;
 		NL_SET_ERR_MSG(info->extack,
 			       "Source driver does not support queue management operations");
-		goto err_unlock_src_dev;
+		goto err_unlock_dst_dev_src_dev_put;
+	}
+
+	src_dev = netdev_put_lock(src_dev);
+	if (src_dev) {
+		err = -ENODEV;
+		goto err_unlock_dst_dev;
 	}
 	if (src_qid >= src_dev->num_rx_queues) {
 		err = -ERANGE;
@@ -1283,6 +1289,9 @@ int netdev_nl_bind_queue_doit(struct sk_buff *skb, struct genl_info *info)
 
 	return genlmsg_reply(rsp, info);
 
+err_unlock_dst_dev_src_dev_put:
+	dev_put(src_dev);
+	goto err_unlock_dst_dev;
 err_unlock_src_dev:
 	netdev_unlock(src_dev);
 err_unlock_dst_dev:
