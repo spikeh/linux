@@ -10,6 +10,7 @@ TEST_GEN_FILES := \
 # end of TEST_GEN_FILES
 
 TEST_PROGS := \
+	bind_queue.py \
 	hds.py \
 	napi_id.py \
 	napi_threaded.py \
