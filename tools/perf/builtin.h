@@ -47,6 +47,7 @@ int cmd_trace(int argc, const char **argv);
 int cmd_inject(int argc, const char **argv);
 int cmd_mem(int argc, const char **argv);
 int cmd_data(int argc, const char **argv);
+int cmd_data_reader(int argc, const char **argv);
 int cmd_ftrace(int argc, const char **argv);
 int cmd_daemon(int argc, const char **argv);
 int cmd_kwork(int argc, const char **argv);

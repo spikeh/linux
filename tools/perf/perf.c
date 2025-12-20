@@ -90,6 +90,7 @@ static struct cmd_struct commands[] = {
 	{ "inject",	cmd_inject,	0 },
 	{ "mem",	cmd_mem,	0 },
 	{ "data",	cmd_data,	0 },
+	{ "data-reader", cmd_data_reader, 0 },
 	{ "ftrace",	cmd_ftrace,	0 },
 	{ "daemon",	cmd_daemon,	0 },
 #ifdef HAVE_LIBTRACEEVENT

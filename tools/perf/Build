@@ -19,6 +19,7 @@ perf-y += builtin-kvm.o
 perf-y += builtin-inject.o
 perf-y += builtin-mem.o
 perf-y += builtin-data.o
+perf-y += builtin-data-reader.o
 perf-y += builtin-version.o
 perf-y += builtin-c2c.o
 perf-y += builtin-daemon.o
