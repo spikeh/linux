@@ -4,17 +4,8 @@
 #include <net/netdev_rx_queue.h>
 #include <net/xdp_sock_drv.h>
 
-/**
- * netdev_queue_get_dma_dev() - get dma device for zero-copy operations
- * @dev:	net_device
- * @idx:	queue index
- *
- * Get dma device for zero-copy operations to be used for this queue.
- * When such device is not available or valid, the function will return NULL.
- *
- * Return: Device or NULL on error
- */
-struct device *netdev_queue_get_dma_dev(struct net_device *dev, int idx)
+static struct device *
+__netdev_queue_get_dma_dev(struct net_device *dev, int idx)
 {
 	const struct netdev_queue_mgmt_ops *queue_ops = dev->queue_mgmt_ops;
 	struct device *dma_dev;
@@ -25,6 +16,38 @@ struct device *netdev_queue_get_dma_dev(struct net_device *dev, int idx)
 		dma_dev = dev->dev.parent;
 
 	return dma_dev && dma_dev->dma_mask ? dma_dev : NULL;
+}
+
+/**
+ * netdev_queue_get_dma_dev() - get dma device for zero-copy operations
+ * @dev:	net_device
+ * @idx:	queue index
+ *
+ * Get dma device for zero-copy operations to be used for this queue. If the
+ * queue is leased to a physical queue, we retrieve the latter's dma device.
+ * When such device is not available or valid, the function will return NULL.
+ *
+ * Return: Device or NULL on error
+ */
+struct device *netdev_queue_get_dma_dev(struct net_device *dev, int idx)
+{
+	struct netdev_rx_queue *rxq;
+	struct device *pdev;
+
+	if (!netif_rxq_is_leased(dev, idx))
+		return __netdev_queue_get_dma_dev(dev, idx);
+
+	rxq = __netif_get_rx_queue(dev, idx);
+	if (!netif_lease_dir_ok(dev, NETIF_VIRT_TO_PHYS))
+		return NULL;
+	rxq = rxq->lease;
+
+	idx = get_netdev_rx_queue_index(rxq);
+	dev = rxq->dev;
+	netdev_lock(dev);
+	pdev = __netdev_queue_get_dma_dev(dev, idx);
+	netdev_unlock(dev);
+	return pdev;
 }
 
 bool netdev_can_create_queue(const struct net_device *dev,
