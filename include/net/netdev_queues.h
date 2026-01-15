@@ -195,6 +195,12 @@ bool netif_rxq_has_unreadable_mp(struct net_device *dev, unsigned int rxq_idx);
 bool netif_rxq_has_mp(struct net_device *dev, unsigned int rxq_idx);
 bool netif_rxq_is_leased(struct net_device *dev, unsigned int rxq_idx);
 
+enum netif_lease_dir {
+	NETIF_VIRT_TO_PHYS,
+	NETIF_PHYS_TO_VIRT,
+};
+bool netif_lease_dir_ok(const struct net_device *dev, enum netif_lease_dir dir);
+
 /**
  * DOC: Lockless queue stopping / waking helpers.
  *
