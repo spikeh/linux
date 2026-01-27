@@ -68,11 +68,13 @@ __netif_get_rx_queue_lease(struct net_device **dev, unsigned int *rxq_idx,
 	return rxq;
 }
 
-struct netdev_rx_queue *
-netif_get_rx_queue_lease_locked(struct net_device **dev, unsigned int *rxq_idx)
+int netif_get_rx_queue_lease_locked(struct net_device **dev, unsigned int *rxq_idx)
 {
 	struct net_device *orig_dev = *dev;
 	struct netdev_rx_queue *rxq;
+
+	if (*rxq_idx >= (*dev)->real_num_rx_queues)
+		return -ERANGE;
 
 	/* Locking order is always from the virtual to the physical device
 	 * see netdev_nl_queue_create_doit().
@@ -81,7 +83,7 @@ netif_get_rx_queue_lease_locked(struct net_device **dev, unsigned int *rxq_idx)
 	rxq = __netif_get_rx_queue_lease(dev, rxq_idx, NETIF_VIRT_TO_PHYS);
 	if (rxq && orig_dev != *dev)
 		netdev_lock(*dev);
-	return rxq;
+	return rxq == NULL ? -EINVAL : 0;
 }
 
 void netif_put_rx_queue_lease_locked(struct net_device *orig_dev,

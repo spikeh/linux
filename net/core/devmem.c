@@ -123,6 +123,7 @@ void net_devmem_free_dmabuf(struct net_iov *niov)
 
 void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 {
+	struct net_device *phys_netdev;
 	struct netdev_rx_queue *rxq;
 	unsigned long xa_idx;
 	unsigned int rxq_idx;
@@ -144,8 +145,11 @@ void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 		};
 
 		rxq_idx = get_netdev_rx_queue_index(rxq);
+		phys_netdev = binding->dev;
+		netif_get_rx_queue_lease_locked(&phys_netdev, &rxq_idx);
 
 		__net_mp_close_rxq(binding->dev, rxq_idx, &mp_params);
+		netif_put_rx_queue_lease_locked(binding->dev, phys_netdev);
 	}
 
 	percpu_ref_kill(&binding->ref);
@@ -159,13 +163,20 @@ int net_devmem_bind_dmabuf_to_queue(struct net_device *dev, u32 rxq_idx,
 		.mp_priv	= binding,
 		.mp_ops		= &dmabuf_devmem_ops,
 	};
+	struct net_device *phys_netdev;
 	struct netdev_rx_queue *rxq;
-	u32 xa_idx;
+	u32 xa_idx, phys_rxq_idx;
 	int err;
 
-	err = __net_mp_open_rxq(dev, rxq_idx, &mp_params, extack);
+	phys_netdev = dev;
+	phys_rxq_idx = rxq_idx;
+	err = netif_get_rx_queue_lease_locked(&phys_netdev, &phys_rxq_idx);
 	if (err)
 		return err;
+
+	err = __net_mp_open_rxq(phys_netdev, phys_rxq_idx, &mp_params, extack);
+	if (err)
+		goto lease_put_unlock;
 
 	rxq = __netif_get_rx_queue(dev, rxq_idx);
 	err = xa_alloc(&binding->bound_rxqs, &xa_idx, rxq, xa_limit_32b,
@@ -177,6 +188,8 @@ int net_devmem_bind_dmabuf_to_queue(struct net_device *dev, u32 rxq_idx,
 
 err_close_rxq:
 	__net_mp_close_rxq(dev, rxq_idx, &mp_params);
+lease_put_unlock:
+	netif_put_rx_queue_lease_locked(dev, phys_netdev);
 	return err;
 }
 
