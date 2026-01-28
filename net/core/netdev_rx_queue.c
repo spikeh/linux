@@ -67,6 +67,29 @@ __netif_get_rx_queue_lease(struct net_device **dev, unsigned int *rxq_idx,
 	return rxq;
 }
 
+struct netdev_rx_queue *
+netif_get_rx_queue_lease_locked(struct net_device **dev, unsigned int *rxq_idx)
+{
+	struct net_device *orig_dev = *dev;
+	struct netdev_rx_queue *rxq;
+
+	/* Locking order is always from the virtual to the physical device
+	 * see netdev_nl_queue_create_doit().
+	 */
+	netdev_ops_assert_locked(orig_dev);
+	rxq = __netif_get_rx_queue_lease(dev, rxq_idx, NETIF_VIRT_TO_PHYS);
+	if (rxq && orig_dev != *dev)
+		netdev_lock(*dev);
+	return rxq;
+}
+
+void netif_put_rx_queue_lease_locked(struct net_device *orig_dev,
+				     struct net_device *dev)
+{
+	if (orig_dev != dev)
+		netdev_unlock(dev);
+}
+
 bool netif_rx_queue_lease_get_owner(struct net_device **dev,
 				    unsigned int *rxq_idx)
 {
@@ -190,23 +213,14 @@ int netdev_rx_queue_restart(struct net_device *dev, unsigned int rxq_idx)
 }
 EXPORT_SYMBOL_NS_GPL(netdev_rx_queue_restart, "NETDEV_INTERNAL");
 
-int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
-		    const struct pp_memory_provider_params *p,
-		    struct netlink_ext_ack *extack)
+static int __net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
+			     const struct pp_memory_provider_params *p,
+			     struct netlink_ext_ack *extack)
 {
 	const struct netdev_queue_mgmt_ops *qops = dev->queue_mgmt_ops;
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int ret;
-
-	if (!netdev_need_ops_lock(dev))
-		return -EOPNOTSUPP;
-
-	if (rxq_idx >= dev->real_num_rx_queues) {
-		NL_SET_ERR_MSG(extack, "rx queue index out of range");
-		return -ERANGE;
-	}
-	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
 
 	if (dev->cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
 		NL_SET_ERR_MSG(extack, "tcp-data-split is disabled");
@@ -254,15 +268,56 @@ err_clear_mp:
 	return ret;
 }
 
-void net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
-		      const struct pp_memory_provider_params *old_p)
+int net_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
+		    const struct pp_memory_provider_params *p,
+		    struct netlink_ext_ack *extack)
+{
+	struct netdev_rx_queue *rxq;
+	int ret;
+
+	if (!netdev_need_ops_lock(dev))
+		return -EOPNOTSUPP;
+
+	if (rxq_idx >= dev->real_num_rx_queues) {
+		NL_SET_ERR_MSG(extack, "rx queue index out of range");
+		return -ERANGE;
+	}
+	rxq_idx = array_index_nospec(rxq_idx, dev->real_num_rx_queues);
+
+	if (!netif_rxq_is_leased(dev, rxq_idx))
+		return __net_mp_open_rxq(dev, rxq_idx, p, extack);
+
+	/* Locking order is always from the virtual to the physical device
+	 * see netdev_nl_queue_create_doit().
+	 */
+	netdev_ops_assert_locked(dev);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
+	if (!netif_lease_dir_ok(dev, NETIF_VIRT_TO_PHYS)) {
+		NL_SET_ERR_MSG(extack, "rx queue leased to a virtual netdev");
+		return -EBUSY;
+	}
+	rxq = rxq->lease;
+
+	rxq_idx = get_netdev_rx_queue_index(rxq);
+	dev = rxq->dev;
+	netdev_lock(dev);
+	if (!dev->dev.parent) {
+		NL_SET_ERR_MSG(extack, "rx queue belongs to a virtual netdev");
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+	ret = __net_mp_open_rxq(dev, rxq_idx, p, extack);
+out:
+	netdev_unlock(dev);
+	return ret;
+}
+
+static void __net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
+			       const struct pp_memory_provider_params *old_p)
 {
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int err;
-
-	if (WARN_ON_ONCE(ifq_idx >= dev->real_num_rx_queues))
-		return;
 
 	rxq = __netif_get_rx_queue(dev, ifq_idx);
 
@@ -283,4 +338,28 @@ void net_mp_close_rxq(struct net_device *dev, unsigned int ifq_idx,
 
 	err = netdev_rx_queue_reconfig(dev, ifq_idx, &qcfg[0], &qcfg[1]);
 	WARN_ON(err && err != -ENETDOWN);
+}
+
+void net_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
+		      const struct pp_memory_provider_params *old_p)
+{
+	struct netdev_rx_queue *rxq;
+
+	if (WARN_ON_ONCE(rxq_idx >= dev->real_num_rx_queues))
+		return;
+	if (!netif_rxq_is_leased(dev, rxq_idx))
+		return __net_mp_close_rxq(dev, rxq_idx, old_p);
+
+	/* Locking order is always from the virtual to the physical device
+	 * see netdev_nl_queue_create_doit().
+	 */
+	netdev_ops_assert_locked(dev);
+	rxq = __netif_get_rx_queue(dev, rxq_idx);
+	WARN_ON_ONCE(!netif_lease_dir_ok(dev, NETIF_VIRT_TO_PHYS));
+	rxq = rxq->lease;
+	rxq_idx = get_netdev_rx_queue_index(rxq);
+	dev = rxq->dev;
+	netdev_lock(dev);
+	__net_mp_close_rxq(dev, rxq_idx, old_p);
+	netdev_unlock(dev);
 }
