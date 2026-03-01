@@ -322,6 +322,8 @@ class NetDrvContEnv(NetDrvEpEnv):
         self._bpf_prog_pref = None
         self._bpf_prog_id = None
         self._init_ns_attached = False
+        self._old_fwd = None
+        self._old_accept_ra = None
 
         self.require_ipver("6")
         local_prefix = self.env.get("LOCAL_PREFIX_V6")
@@ -388,9 +390,29 @@ class NetDrvContEnv(NetDrvEpEnv):
             del self.netns
             self.netns = None
 
+        if self._old_fwd is not None:
+            with open("/proc/sys/net/ipv6/conf/all/forwarding", "w") as f:
+                f.write(self._old_fwd)
+            self._old_fwd = None
+        if self._old_accept_ra is not None:
+            with open("/proc/sys/net/ipv6/conf/all/accept_ra", "w") as f:
+                f.write(self._old_accept_ra)
+            self._old_accept_ra = None
+
         super().__del__()
 
     def _setup_ns(self):
+        fwd_path = "/proc/sys/net/ipv6/conf/all/forwarding"
+        ra_path = "/proc/sys/net/ipv6/conf/all/accept_ra"
+        with open(fwd_path) as f:
+            self._old_fwd = f.read().strip()
+        with open(ra_path) as f:
+            self._old_accept_ra = f.read().strip()
+        with open(fwd_path, "w") as f:
+            f.write("1")
+        with open(ra_path, "w") as f:
+            f.write("2")
+
         self.netns = NetNS()
         cmd("ip netns attach init 1")
         self._init_ns_attached = True
