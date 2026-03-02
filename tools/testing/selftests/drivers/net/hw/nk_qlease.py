@@ -459,6 +459,7 @@ def test_attach_xdp_with_mp(cfg) -> None:
     with bkg(rx_cmd):
         wait_port_listen(cfg.port, proto="tcp", ns=cfg.netns)
 
+        time.sleep(0.1)
         queue_info = netdevnl.queue_get(
             {"ifindex": cfg.ifindex, "id": cfg.src_queue, "type": "rx"}
         )
