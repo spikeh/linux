@@ -312,8 +312,6 @@ class NetDrvContEnv(NetDrvEpEnv):
     """
 
     def __init__(self, src_path, rxqueues=1, **kwargs):
-        super().__init__(src_path, **kwargs)
-
         self.netns = None
         self._nk_host_ifname = None
         self._nk_guest_ifname = None
@@ -325,15 +323,20 @@ class NetDrvContEnv(NetDrvEpEnv):
         self._old_fwd = None
         self._old_accept_ra = None
 
+        super().__init__(src_path, **kwargs)
+
         self.require_ipver("6")
         local_prefix = self.env.get("LOCAL_PREFIX_V6")
         if not local_prefix:
             raise KsftSkipEx("LOCAL_PREFIX_V6 required")
 
-        local_prefix = local_prefix.rstrip("/64").rstrip("::").rstrip(":")
-        self.ipv6_prefix = f"{local_prefix}::"
-        self.nk_host_ipv6 = f"{local_prefix}::2:1"
-        self.nk_guest_ipv6 = f"{local_prefix}::2:2"
+        try:
+            net = ipaddress.IPv6Network(local_prefix, strict=False)
+        except ValueError:
+            net = ipaddress.IPv6Network(f"{local_prefix}::/64", strict=False)
+        self.ipv6_prefix = str(net.network_address)
+        self.nk_host_ipv6 = f"{self.ipv6_prefix}2:1"
+        self.nk_guest_ipv6 = f"{self.ipv6_prefix}2:2"
 
         rtnl = RtnlFamily()
         rtnl.newlink(
