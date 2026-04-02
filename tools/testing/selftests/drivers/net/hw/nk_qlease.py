@@ -452,7 +452,7 @@ def test_create_tx_type(netns) -> None:
         ksft_eq(e.exception.nl_msg.error, -errno.EINVAL)
 
 
-def test_create_primary(netns) -> None:
+def test_create_primary(_netns) -> None:
     nsimdev = NetdevSimDev(port_count=1, queue_count=2)
     defer(nsimdev.remove)
     nsim = nsimdev.nsims[0]
@@ -838,7 +838,7 @@ def test_multi_netkit_remove_phys(netns) -> None:
     ksft_ne(ret.ret, 0)
 
 
-def test_single_remove_phys(netns) -> None:
+def test_single_remove_phys(_netns) -> None:
     nsimdev = NetdevSimDev(port_count=1, queue_count=2)
     defer(nsimdev.remove)
     nsim = nsimdev.nsims[0]
